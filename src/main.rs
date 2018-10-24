@@ -90,9 +90,20 @@ struct DrinkForm {
 ///
 /// If no records correspond to the `beer` or `brewery` names, new records will be created.
 fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+    type DbAddr = Addr<DatabaseExecutor>;
+
+    // Save these for later
+    let beer_name = details.beer.clone();
+    let db_addr_copy1 = state.db.clone();
+    let db_addr_copy2 = state.db.clone();
+    let db_addr_copy3 = state.db.clone();
+
+    /*********************************************/
+    /*  Closures for database operations         */
+    /*********************************************/
+
     // This closure will create a new brewery record with the given `name`.
-    let db_addr = state.db.clone();
-    let create_brewery = move |name: String| {
+    let create_brewery = |db_addr: DbAddr, name: String| {
         db_addr
             .send(CreateBrewery { name: name })
             .from_err()
@@ -101,8 +112,7 @@ fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResp
     };
 
     // This closure will create a new beer record, given a `name` and its `brewery_id`.
-    let db_addr = state.db.clone();
-    let create_beer = move |name: String, brewery_id: i32| {
+    let create_beer = |db_addr: DbAddr, name: String, brewery_id: i32| {
         db_addr
             .send(CreateBeer { name, brewery_id })
             .from_err()
@@ -110,61 +120,69 @@ fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResp
             .map_err(|e| actix_web::Error::from(e))
     };
 
-    // Look up a brewery by name; If one is not found, create a new record.
-    //
-    // This is a little messy, but for info on the use of `Either`,
-    // see: https://github.com/rust-lang-nursery/futures-rs/issues/683
-    let brewery_name = details.brewery.clone();
-    let get_brewery = state
-        .db
-        .send(GetBreweryByName {
-            name: brewery_name.clone(),
-        })
-        .from_err::<Error>()
-        .map(move |res| match res {
-            Ok(Some(brewery)) => Either::A(futures::future::result(Ok(brewery))),
-            Ok(None) => Either::B(create_brewery(brewery_name.clone())),
-            Err(e) => Either::A(futures::future::result(Err(actix_web::Error::from(e)))),
-        })
-        .from_err::<actix_web::Error>()
-        .flatten();
+    // This closure will lookup a brewery given its `name` and,
+    // if no matching record is found, will insert a new one.
+    let get_brewery = |db_addr: DbAddr, name: String| {
+        db_addr
+            .send(GetBreweryByName { name: name.clone() })
+            .from_err::<Error>()
+            .map(move |res| match res {
+                Ok(Some(brewery)) => Either::A(futures::future::result(Ok(brewery))),
+                Ok(None) => Either::B(create_brewery(db_addr, name)),
+                Err(e) => Either::A(futures::future::result(Err(actix_web::Error::from(e)))),
+            })
+            .from_err::<actix_web::Error>()
+            .flatten()
+    };
 
-    // Look up a beer by name; if one is not found, create a new record
-    let beer_name = details.beer.clone();
-    let db_addr = state.db.clone();
-    let get_beer = get_brewery.and_then(move |brewery| {
+    // This closure will lookup a beer given its `name` and `brewery_id` and,
+    // will insert a new one if no record is found.
+    let get_beer = move |db_addr: DbAddr, name: String, brewery_id: i32| {
         db_addr
             .send(GetBeerByName {
-                name: beer_name.clone(),
-                brewery_id: brewery.id,
+                name: name.clone(),
+                brewery_id: brewery_id,
             })
             .from_err()
             .and_then(move |res| match res {
                 Ok(Some(beer)) => Either::A(futures::future::result(Ok(beer))),
-                Ok(None) => Either::B(create_beer(beer_name, brewery.id)),
+                Ok(None) => Either::B(create_beer(db_addr, name, brewery_id)),
                 Err(e) => Either::A(futures::future::result(Err(actix_web::Error::from(e)))),
             })
-    });
+    };
 
-    // Create a new drink record
-    let db_addr = state.db.clone();
-    let drank_on = details.drank_on;
-    let rating = details.rating;
-    let comment = details.comment.clone();
-    get_beer
+    // This will insert a new Drink record
+    let record_drink = |db_addr: DbAddr, drink: CreateDrink| {
+        db_addr
+            .send(drink)
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    /*********************************************/
+    /* Begin actual function execution           */
+    /*********************************************/
+
+    // Look up the given brewery, and create a new record if one is not found
+    get_brewery(db_addr_copy1, details.brewery.clone())
+        // Then lookup the beer by name, and create a new record if it is not found.
+        .and_then(move |brewery| get_beer(db_addr_copy2, beer_name, brewery.id))
+        // Finally, insert a record of the individual drink
         .and_then(move |beer| {
-            db_addr
-                .send(CreateDrink {
-                    drank_on: drank_on,
-                    beer_id: beer.id,
-                    rating: rating,
-                    comment: comment,
-                })
-                .from_err()
-                .and_then(|res| match res {
-                    Ok(drink) => Ok(HttpResponse::Ok().json(drink)),
-                    Err(_) => Ok(HttpResponse::InternalServerError().into()),
-                })
+            let drink = CreateDrink {
+                drank_on: details.drank_on,
+                beer_id: beer.id,
+                rating: details.rating,
+                comment: details.comment.clone(),
+            };
+
+            record_drink(db_addr_copy3, drink)
+        })
+        // Format the result for output
+        .then(|res| match res {
+            Ok(drink) => Ok(HttpResponse::Ok().json(drink)),
+            Err(_) => Ok(HttpResponse::InternalServerError().into()),
         })
         .responder()
 }
