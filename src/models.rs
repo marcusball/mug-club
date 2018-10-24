@@ -27,8 +27,17 @@ pub struct Drink {
     pub id: i32,
     pub drank_on: NaiveDate,
     pub beer_id: i32,
-    pub rating: i8,
+    pub rating: i16,
     pub comment: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Insertable)]
+#[table_name = "drink"]
+pub struct NewDrink<'a> {
+    pub drank_on: &'a NaiveDate,
+    pub beer_id: &'a i32,
+    pub rating: &'a i16,
+    pub comment: Option<&'a String>,
 }

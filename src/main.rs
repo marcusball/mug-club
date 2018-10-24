@@ -22,20 +22,50 @@ mod error;
 mod models;
 mod schema;
 
+use self::db::{CreateDrink, DatabaseExecutor};
+
 use std::str::FromStr;
 
 use actix::prelude::*;
 use actix_web::middleware::{cors, Logger};
 use actix_web::*;
 use actix_web::{fs, server, App, HttpRequest, Responder};
+use chrono::naive::NaiveDate;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use futures::Future;
 
-struct AppState;
+struct AppState {
+    db: Addr<db::DatabaseExecutor>,
+}
 
 fn index(_: &HttpRequest<AppState>) -> impl Responder {
     "Hello World".to_owned()
+}
+
+#[derive(Deserialize)]
+struct DrinkForm {
+    drank_on: NaiveDate,
+    beer_id: i32,
+    rating: i16,
+    comment: Option<String>,
+}
+
+fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+    state
+        .db
+        .send(CreateDrink {
+            drank_on: details.drank_on.clone(),
+            beer_id: details.beer_id,
+            rating: details.rating,
+            comment: details.comment.clone(),
+        })
+        .from_err()
+        .and_then(|res| match res {
+            Ok(drink) => Ok(HttpResponse::Ok().json(drink)),
+            Err(_) => Ok(HttpResponse::InternalServerError().into()),
+        })
+        .responder()
 }
 
 fn main() {
@@ -55,11 +85,24 @@ fn main() {
     // Construct the full Socket address
     let listen_addr = std::net::SocketAddr::new(ip, port);
 
+    // Create a connection pool to the database
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set!");
+    let manager = ConnectionManager::<PgConnection>::new(database_url);
+    let pool = Pool::builder()
+        .build(manager)
+        .expect("Failed to create database connection pool!");
+
+    // Start 3 database executor actors to handle operations in parallel.
+    let addr = SyncArbiter::start(3, move || DatabaseExecutor(pool.clone()));
+
     server::new(move || {
-        App::with_state(AppState)
+        App::with_state(AppState { db: addr.clone() })
             .middleware(Logger::default())
             .middleware(cors::Cors::build().finish())
             .resource("/", |r| r.h(index))
+            .resource("/drink", |r| {
+                r.method(http::Method::POST).with_async(new_drink)
+            })
     })
     .bind(&listen_addr)
     .unwrap()
