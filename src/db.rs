@@ -61,3 +61,50 @@ impl Handler<CreateDrink> for DatabaseExecutor {
             .get_result(&conn)?)
     }
 }
+
+/*************************************/
+/** Get Drinks message              **/
+/*************************************/
+
+#[derive(Serialize, Queryable)]
+pub struct ExpandedDrink {
+    pub id: i32,
+    pub drank_on: NaiveDate,
+    pub beer_name: String,
+    pub brewery_name: String,
+    pub rating: i16,
+    pub comment: Option<String>,
+}
+
+pub struct GetDrinks;
+
+impl Message for GetDrinks {
+    type Result = Result<Vec<ExpandedDrink>>;
+}
+
+impl Handler<GetDrinks> for DatabaseExecutor {
+    type Result = Result<Vec<ExpandedDrink>>;
+
+    fn handle(&mut self, _: GetDrinks, _: &mut Self::Context) -> Self::Result {
+        use super::schema::beer;
+        use super::schema::beer::dsl::*;
+        use super::schema::brewery;
+        use super::schema::drink;
+        use super::schema::drink::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        Ok(drink
+            .inner_join(beer)
+            .inner_join(brewery::table.on(beer::brewery_id.eq(brewery::id)))
+            .select((
+                drink::id,
+                drink::drank_on,
+                beer::name,
+                brewery::name,
+                drink::rating,
+                drink::comment,
+            ))
+            .load::<ExpandedDrink>(&conn)?)
+    }
+}

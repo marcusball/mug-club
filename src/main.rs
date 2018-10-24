@@ -22,7 +22,7 @@ mod error;
 mod models;
 mod schema;
 
-use self::db::{CreateDrink, DatabaseExecutor};
+use self::db::{CreateDrink, DatabaseExecutor, GetDrinks};
 
 use std::str::FromStr;
 
@@ -41,6 +41,18 @@ struct AppState {
 
 fn index(_: &HttpRequest<AppState>) -> impl Responder {
     "Hello World".to_owned()
+}
+
+fn get_drinks(state: State<AppState>) -> FutureResponse<HttpResponse> {
+    state
+        .db
+        .send(GetDrinks)
+        .from_err()
+        .and_then(|res| match res {
+            Ok(drinks) => Ok(HttpResponse::Ok().json(drinks)),
+            Err(_) => Ok(HttpResponse::InternalServerError().into()),
+        })
+        .responder()
 }
 
 #[derive(Deserialize)]
@@ -101,6 +113,7 @@ fn main() {
             .middleware(cors::Cors::build().finish())
             .resource("/", |r| r.h(index))
             .resource("/drink", |r| {
+                r.method(http::Method::GET).with_async(get_drinks);
                 r.method(http::Method::POST).with_async(new_drink)
             })
     })
