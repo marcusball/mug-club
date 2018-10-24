@@ -70,8 +70,8 @@ impl Handler<CreateDrink> for DatabaseExecutor {
 pub struct ExpandedDrink {
     pub id: i32,
     pub drank_on: NaiveDate,
-    pub beer_name: String,
-    pub brewery_name: String,
+    pub beer: String,
+    pub brewery: String,
     pub rating: i16,
     pub comment: Option<String>,
 }
