@@ -7,5 +7,4 @@ pub enum Error {
     SessionNotFound,
 }
 
-impl ResponseError for Error {}
-*/
+impl ResponseError for Error {}*/

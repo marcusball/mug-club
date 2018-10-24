@@ -13,6 +13,12 @@ pub struct Brewery {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Insertable)]
+#[table_name = "brewery"]
+pub struct NewBrewery<'a> {
+    pub name: &'a str,
+}
+
 #[derive(Serialize, Queryable)]
 pub struct Beer {
     pub id: i32,
@@ -20,6 +26,13 @@ pub struct Beer {
     pub brewery_id: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Insertable)]
+#[table_name = "beer"]
+pub struct NewBeer<'a> {
+    pub name: &'a str,
+    pub brewery_id: i32,
 }
 
 #[derive(Serialize, Queryable)]

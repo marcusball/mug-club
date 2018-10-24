@@ -108,3 +108,119 @@ impl Handler<GetDrinks> for DatabaseExecutor {
             .load::<ExpandedDrink>(&conn)?)
     }
 }
+
+/*************************************/
+/*************************************/
+
+pub struct GetBreweryByName {
+    pub name: String,
+}
+
+impl Message for GetBreweryByName {
+    type Result = Result<Option<models::Brewery>>;
+}
+
+impl Handler<GetBreweryByName> for DatabaseExecutor {
+    type Result = Result<Option<models::Brewery>>;
+
+    fn handle(&mut self, message: GetBreweryByName, _: &mut Self::Context) -> Self::Result {
+        use super::schema::brewery::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        Ok(brewery
+            .filter(name.eq(&message.name))
+            .first::<models::Brewery>(&conn)
+            .optional()?)
+    }
+}
+
+/*************************************/
+/*************************************/
+
+pub struct GetBeerByName {
+    pub name: String,
+    pub brewery_id: i32,
+}
+
+impl Message for GetBeerByName {
+    type Result = Result<Option<models::Beer>>;
+}
+
+impl Handler<GetBeerByName> for DatabaseExecutor {
+    type Result = Result<Option<models::Beer>>;
+
+    fn handle(&mut self, message: GetBeerByName, _: &mut Self::Context) -> Self::Result {
+        use super::schema::beer::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        Ok(beer
+            .filter(
+                name.eq(&message.name)
+                    .and(brewery_id.eq(&message.brewery_id)),
+            )
+            .first::<models::Beer>(&conn)
+            .optional()?)
+    }
+}
+
+/*************************************/
+/*************************************/
+
+pub struct CreateBrewery {
+    pub name: String,
+}
+
+impl Message for CreateBrewery {
+    type Result = Result<models::Brewery>;
+}
+
+impl Handler<CreateBrewery> for DatabaseExecutor {
+    type Result = Result<models::Brewery>;
+
+    fn handle(&mut self, message: CreateBrewery, _: &mut Self::Context) -> Self::Result {
+        use super::schema::brewery::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        let new_brewery = models::NewBrewery {
+            name: &message.name,
+        };
+
+        Ok(diesel::insert_into(brewery)
+            .values(new_brewery)
+            .get_result(&conn)?)
+    }
+}
+
+/*************************************/
+/*************************************/
+
+pub struct CreateBeer {
+    pub name: String,
+    pub brewery_id: i32,
+}
+
+impl Message for CreateBeer {
+    type Result = Result<models::Beer>;
+}
+
+impl Handler<CreateBeer> for DatabaseExecutor {
+    type Result = Result<models::Beer>;
+
+    fn handle(&mut self, message: CreateBeer, _: &mut Self::Context) -> Self::Result {
+        use super::schema::beer::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        let new_beer = models::NewBeer {
+            name: &message.name,
+            brewery_id: message.brewery_id,
+        };
+
+        Ok(diesel::insert_into(beer)
+            .values(new_beer)
+            .get_result(&conn)?)
+    }
+}
