@@ -1,3 +1,5 @@
+#![allow(proc_macro_derive_resolution_fallback)] // See: https://github.com/diesel-rs/diesel/issues/1785
+
 extern crate actix;
 extern crate actix_web;
 extern crate futures;
