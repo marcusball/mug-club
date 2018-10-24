@@ -12,9 +12,7 @@ extern crate diesel;
 extern crate chrono;
 extern crate dotenv;
 extern crate env_logger;
-#[macro_use]
 extern crate failure;
-#[macro_use]
 extern crate failure_derive;
 
 mod db;
@@ -32,7 +30,7 @@ use std::str::FromStr;
 use actix::prelude::*;
 use actix_web::middleware::{cors, Logger};
 use actix_web::*;
-use actix_web::{fs, server, App, HttpRequest, Responder};
+use actix_web::{server, App, HttpRequest, Responder};
 use chrono::naive::NaiveDate;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
