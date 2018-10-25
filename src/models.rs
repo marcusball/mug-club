@@ -6,6 +6,11 @@ use chrono::naive::NaiveDate;
 use chrono::{DateTime, Utc};
 
 #[derive(Serialize, Queryable)]
+
+/*************************************/
+/* Brewery Models                    */
+/*************************************/
+
 pub struct Brewery {
     pub id: i32,
     pub name: String,
@@ -18,6 +23,10 @@ pub struct Brewery {
 pub struct NewBrewery<'a> {
     pub name: &'a str,
 }
+
+/*************************************/
+/* Beer Models                       */
+/*************************************/
 
 #[derive(Serialize, Queryable)]
 pub struct Beer {
@@ -34,6 +43,10 @@ pub struct NewBeer<'a> {
     pub name: &'a str,
     pub brewery_id: i32,
 }
+
+/*************************************/
+/* Drink Models                      */
+/*************************************/
 
 #[derive(Serialize, Queryable)]
 pub struct Drink {
@@ -53,4 +66,48 @@ pub struct NewDrink<'a> {
     pub beer_id: &'a i32,
     pub rating: &'a i16,
     pub comment: Option<&'a String>,
+}
+
+/*************************************/
+/* Person Models                     */
+/*************************************/
+
+#[derive(Serialize, Queryable)]
+pub struct Person {
+    pub id: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Queryable)]
+pub struct Identity {
+    pub identifier: String,
+    pub verified: bool,
+    pub person_id: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Insertable)]
+#[table_name = "identity"]
+pub struct NewIdentity<'a> {
+    pub identifier: &'a str,
+    pub person_id: i32,
+}
+
+#[derive(Serialize, Queryable)]
+pub struct Session {
+    pub id: String,
+    pub person_id: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Insertable)]
+#[table_name = "login_session"]
+pub struct NewSession<'a> {
+    pub id: &'a str,
+    pub person_id: i32,
+    pub expires_at: DateTime<Utc>,
 }

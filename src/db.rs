@@ -229,3 +229,111 @@ impl Handler<CreateBeer> for DatabaseExecutor {
             .get_result(&conn)?)
     }
 }
+
+/*************************************/
+/* Login and Registration            */
+/*************************************/
+
+pub struct LookupIdentiy {
+    pub identifier: String,
+}
+
+impl Message for LookupIdentiy {
+    type Result = Result<models::Identity>;
+}
+
+impl Handler<LookupIdentiy> for DatabaseExecutor {
+    type Result = Result<models::Identity>;
+
+    fn handle(&mut self, message: LookupIdentiy, _: &mut Self::Context) -> Self::Result {
+        use self::schema::identity::dsl::*;
+        use self::schema::person::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        // Query to see if a matching Identity exists
+        let existing_identity = identity
+            .filter(identifier.eq(&message.identifier))
+            .first::<models::Identity>(&conn)
+            .optional()?;
+
+        // If an Identity was found, return it
+        if let Some(existing_identity) = existing_identity {
+            info!(
+                "Found existing identity matching '{}', person {}.",
+                existing_identity.identifier, existing_identity.person_id
+            );
+            return Ok(existing_identity);
+        }
+
+        // If here, then no identity was found
+        // Create a new person to go with that identity
+        let new_person = diesel::insert_into(person) /* lol */
+            .default_values() // currently no other values need to be inserted at the moment
+            .get_result::<models::Person>(&conn)?;
+
+        // Insert the new identity
+        let new_identity = diesel::insert_into(identity)
+            .values(&models::NewIdentity {
+                identifier: &message.identifier,
+                person_id: new_person.id,
+            })
+            .get_result::<models::Identity>(&conn)?;
+
+        info!(
+            "Created new identity matching '{}' for person {}.",
+            new_identity.identifier, new_identity.person_id
+        );
+
+        Ok(new_identity)
+    }
+}
+
+/*
+/// Returns the person record, if one already exists,
+/// otherwise creates a new person record.
+fn get_or_register_person(message: &CreatePerson, conn: &PgConnection) -> Result<models::Person> {
+    use self::schema::person::dsl::*;
+
+    let uuid = Uuid::new_v4();
+    let new_person = models::NewPerson {
+        id: &uuid,
+        name: &message.name,
+    };
+
+    // Query to see if a person with this identity already exists
+    let existing_person = person
+        .filter(name.eq(&message.name))
+        .first::<models::Person>(conn)
+        .optional();
+
+    // If this is not a new user, return the existing identity
+    if let Ok(Some(login)) = existing_person {
+        return Ok(login);
+    }
+
+    // Otherwise, register the new person
+    Ok(diesel::insert_into(person)
+        .values(&new_person)
+        .get_result(conn)
+        .unwrap())
+}
+
+fn create_login_session(person: &models::Person, conn: &PgConnection) -> Result<models::Session> {
+    use self::schema::login_session::dsl::*;
+
+    // Create a unique identifier for this session
+    let nonce = TextNonce::sized(64).unwrap();
+
+    let new_session = models::NewSession {
+        id: &nonce,
+        person_id: &person.id,
+        expires_at: Utc::now() + Duration::weeks(2),
+    };
+
+    Ok(diesel::insert_into(login_session)
+        .values(&new_session)
+        .get_result(conn)
+        .unwrap())
+}
+*/

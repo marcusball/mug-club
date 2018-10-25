@@ -9,11 +9,14 @@ extern crate serde_json;
 extern crate serde_derive;
 #[macro_use]
 extern crate diesel;
+extern crate authy;
 extern crate chrono;
 extern crate dotenv;
 extern crate env_logger;
 extern crate failure;
 extern crate failure_derive;
+#[macro_use]
+extern crate log;
 
 mod db;
 mod error;
@@ -22,7 +25,7 @@ mod schema;
 
 use self::db::{
     CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, GetBeerByName, GetBreweryByName,
-    GetDrinks,
+    GetDrinks, LookupIdentiy,
 };
 
 use std::str::FromStr;
@@ -185,6 +188,28 @@ fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResp
         .responder()
 }
 
+#[derive(Deserialize)]
+struct AuthForm {
+    identity: String,
+}
+
+fn begin_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+    state
+        .db
+        .send(LookupIdentiy {
+            identifier: form.identity.clone(),
+        })
+        .from_err()
+        .and_then(|res| match res {
+            Ok(ident) => Ok(HttpResponse::Ok().json(ident)),
+            Err(e) => {
+                error!("{}", e);
+                Ok(HttpResponse::InternalServerError().into())
+            }
+        })
+        .responder()
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -221,12 +246,15 @@ fn main() {
                 r.method(http::Method::GET).with_async(get_drinks);
                 r.method(http::Method::POST).with_async(new_drink)
             })
+            .resource("/auth", |r| {
+                r.method(http::Method::POST).with_async(begin_auth)
+            })
     })
     .bind(&listen_addr)
     .unwrap()
     .start();
 
-    println!("Listening on {}", listen_addr);
+    info!("Listening on {}", listen_addr);
 
     let _ = sys.run();
 }
