@@ -12,6 +12,10 @@ use super::schema;
 
 type Result<T> = ::std::result::Result<T, Error>;
 
+// Diesel does not have a `lower` function built in; create one ourselves.
+// See: https://github.com/diesel-rs/diesel/issues/560#issuecomment-270199166
+sql_function!(lower, lower_t, (a: diesel::types::VarChar) -> diesel::types::VarChar);
+
 pub struct DatabaseExecutor(pub Pool<ConnectionManager<PgConnection>>);
 
 impl DatabaseExecutor {
@@ -129,7 +133,7 @@ impl Handler<GetBreweryByName> for DatabaseExecutor {
         let conn = self.get_conn()?;
 
         Ok(brewery
-            .filter(name.eq(&message.name))
+            .filter(lower(name).eq(&message.name.to_lowercase()))
             .first::<models::Brewery>(&conn)
             .optional()?)
     }
@@ -157,7 +161,8 @@ impl Handler<GetBeerByName> for DatabaseExecutor {
 
         Ok(beer
             .filter(
-                name.eq(&message.name)
+                lower(name)
+                    .eq(&message.name.to_lowercase())
                     .and(brewery_id.eq(&message.brewery_id)),
             )
             .first::<models::Beer>(&conn)

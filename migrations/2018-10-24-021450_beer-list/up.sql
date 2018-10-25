@@ -19,6 +19,8 @@ CREATE TABLE beer (
     UNIQUE (name)
 );
 
+CREATE INDEX ON beer (brewery_id);
+
 CREATE TABLE drink (
     id SERIAL PRIMARY KEY,
     drank_on DATE NOT NULL,
@@ -29,6 +31,13 @@ CREATE TABLE drink (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX ON drink (drank_on);
+CREATE INDEX ON drink (beer_id);
+CREATE INDEX ON drink (rating);
+
 SELECT diesel_manage_updated_at('beer');
 SELECT diesel_manage_updated_at('brewery');
 SELECT diesel_manage_updated_at('drink');
+
+CREATE INDEX brewery_name_lower_idx ON brewery (LOWER(name));
+CREATE INDEX beer_name_lower_idx ON beer (LOWER(name));
