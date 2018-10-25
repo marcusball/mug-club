@@ -20,6 +20,7 @@ extern crate log;
 extern crate regex;
 #[macro_use]
 extern crate lazy_static;
+extern crate textnonce;
 
 mod db;
 mod error;
@@ -28,7 +29,7 @@ mod schema;
 
 use self::db::{
     CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, GetBeerByName, GetBreweryByName,
-    GetDrinks, LookupIdentiy,
+    GetDrinks, LookupIdentiy, StartSession,
 };
 
 use std::convert::From;
@@ -244,6 +245,34 @@ fn begin_auth((form, _state): (Form<AuthForm>, State<AppState>)) -> FutureRespon
 fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
     use authy::api::phone;
 
+    type DbAddr = Addr<DatabaseExecutor>;
+
+    /*********************************************/
+    /*  Closures for database operations         */
+    /*********************************************/
+
+    let lookup_idenity = |db_addr: DbAddr, country_code: u16, phone_number: String| {
+        db_addr
+            .send(LookupIdentiy {
+                identifier: format!("{}{}", country_code, phone_number),
+            })
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    let start_session = |db_addr: DbAddr, person_id: i32| {
+        db_addr
+            .send(StartSession { person_id })
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    /*********************************************/
+    /*  Begin request handling logic             */
+    /*********************************************/
+
     lazy_static! {
         // See: https://github.com/authy/authy-form-helpers/blob/be2081cd44041ba61173658c100471c8ff7302b9/src/form.authy.js#L693
         static ref RE: Regex =
@@ -266,6 +295,10 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
         return futures::future::ok(HttpResponse::BadRequest().body("Invalid phone number"))
             .responder();
     }
+
+    /*********************************************/
+    /*  Verify the phone number and code         */
+    /*********************************************/
 
     let client = authy::Client::new(
         "https://api.authy.com",
@@ -312,26 +345,34 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
         }
     }
 
-    state
-        .db
-        .send(LookupIdentiy {
-            identifier: format!("{}{}", form.country_code, form.phone_number),
-        })
-        .from_err()
-        .and_then(move |res| match res {
-            Ok(ident) => {
-                info!(
-                    "Successfully verified identity for person {}",
-                    ident.person_id
-                );
-                Ok(HttpResponse::Ok().json(ident))
-            }
-            Err(e) => {
-                error!("{}", e);
-                Ok(HttpResponse::InternalServerError().into())
-            }
-        })
-        .responder()
+    /*********************************************/
+    /*  Verified, find identity, start session   */
+    /*********************************************/
+
+    let db_addr = state.db.clone();
+
+    lookup_idenity(
+        state.db.clone(),
+        form.country_code,
+        form.phone_number.clone(),
+    )
+    .and_then(move |ident| start_session(db_addr, ident.person_id))
+    .then(move |res| match res {
+        Ok(session) => {
+            info!(
+                "Successfully verified identity for person {}",
+                session.person_id
+            );
+
+            Ok(HttpResponse::Ok().json(session))
+        }
+        Err(e) => {
+            error!("Failed to start session! Error: {}", e);
+
+            Ok(HttpResponse::InternalServerError().into())
+        }
+    })
+    .responder()
 }
 
 fn main() {

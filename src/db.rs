@@ -2,10 +2,12 @@ extern crate actix;
 
 use actix::prelude::*;
 use chrono::naive::NaiveDate;
+use chrono::{Duration, Utc};
 use diesel;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use failure::Error;
+use textnonce::TextNonce;
 
 use super::models;
 use super::schema;
@@ -289,51 +291,37 @@ impl Handler<LookupIdentiy> for DatabaseExecutor {
     }
 }
 
-/*
-/// Returns the person record, if one already exists,
-/// otherwise creates a new person record.
-fn get_or_register_person(message: &CreatePerson, conn: &PgConnection) -> Result<models::Person> {
-    use self::schema::person::dsl::*;
+/*************************************/
 
-    let uuid = Uuid::new_v4();
-    let new_person = models::NewPerson {
-        id: &uuid,
-        name: &message.name,
-    };
+/*************************************/
 
-    // Query to see if a person with this identity already exists
-    let existing_person = person
-        .filter(name.eq(&message.name))
-        .first::<models::Person>(conn)
-        .optional();
+pub struct StartSession {
+    pub person_id: i32,
+}
 
-    // If this is not a new user, return the existing identity
-    if let Ok(Some(login)) = existing_person {
-        return Ok(login);
+impl Message for StartSession {
+    type Result = Result<models::Session>;
+}
+
+impl Handler<StartSession> for DatabaseExecutor {
+    type Result = Result<models::Session>;
+
+    fn handle(&mut self, message: StartSession, _: &mut Self::Context) -> Self::Result {
+        use self::schema::login_session::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        // Create a unique identifier for this session
+        let nonce = TextNonce::sized(64).unwrap();
+
+        let new_session = models::NewSession {
+            id: &nonce,
+            person_id: message.person_id,
+            expires_at: Utc::now() + Duration::weeks(2),
+        };
+
+        Ok(diesel::insert_into(login_session)
+            .values(&new_session)
+            .get_result::<models::Session>(&conn)?)
     }
-
-    // Otherwise, register the new person
-    Ok(diesel::insert_into(person)
-        .values(&new_person)
-        .get_result(conn)
-        .unwrap())
 }
-
-fn create_login_session(person: &models::Person, conn: &PgConnection) -> Result<models::Session> {
-    use self::schema::login_session::dsl::*;
-
-    // Create a unique identifier for this session
-    let nonce = TextNonce::sized(64).unwrap();
-
-    let new_session = models::NewSession {
-        id: &nonce,
-        person_id: &person.id,
-        expires_at: Utc::now() + Duration::weeks(2),
-    };
-
-    Ok(diesel::insert_into(login_session)
-        .values(&new_session)
-        .get_result(conn)
-        .unwrap())
-}
-*/
