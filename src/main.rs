@@ -194,10 +194,14 @@ fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResp
 
 #[derive(Deserialize)]
 struct AuthForm {
-    identity: String,
+    country_code: u16,
+    phone_number: String,
+    code: Option<String>,
 }
 
-fn begin_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+fn begin_auth((form, _state): (Form<AuthForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+    use authy::api::phone;
+
     lazy_static! {
         // See: https://github.com/authy/authy-form-helpers/blob/be2081cd44041ba61173658c100471c8ff7302b9/src/form.authy.js#L693
         static ref RE: Regex =
@@ -205,20 +209,123 @@ fn begin_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureRespons
     }
 
     // Check to make sure that the identity submitted appears to be a phone number
-    if !RE.is_match(&form.identity) {
-        info!("Received invalid phone number '{}'!", form.identity);
+    if !RE.is_match(&form.phone_number) {
+        info!(
+            "Received invalid phone number '{}' '{}'!",
+            form.country_code, form.phone_number
+        );
         return futures::future::ok(HttpResponse::BadRequest().body("Invalid phone number"))
             .responder();
+    }
+
+    let client = authy::Client::new(
+        "https://api.authy.com",
+        &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
+    );
+
+    let (status, _start) = match phone::start(
+        &client,
+        phone::ContactType::SMS,
+        form.country_code,
+        &form.phone_number,
+        Some(6),
+        None,
+    ) {
+        Ok(res) => res,
+        Err(e) => {
+            error!("Failed to start phone number verification! Error: {}", e);
+            return futures::future::ok(HttpResponse::InternalServerError().into()).responder();
+        }
+    };
+
+    futures::future::ok(HttpResponse::Ok().body(status.message)).responder()
+}
+
+fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+    use authy::api::phone;
+
+    lazy_static! {
+        // See: https://github.com/authy/authy-form-helpers/blob/be2081cd44041ba61173658c100471c8ff7302b9/src/form.authy.js#L693
+        static ref RE: Regex =
+            Regex::new(r"^([0-9][0-9][0-9])\W*([0-9][0-9]{2})\W*([0-9]{0,5})$").unwrap();
+    }
+
+    // Make sure some kind of verification code was submitted
+    if form.code.is_none() {
+        info!("Verification code was submitted!");
+        return futures::future::ok(HttpResponse::BadRequest().body("Missing verification code!"))
+            .responder();
+    }
+
+    // Check to make sure that the identity submitted appears to be a phone number
+    if !RE.is_match(&form.phone_number) {
+        info!(
+            "Received invalid phone number '{}' '{}'!",
+            form.country_code, form.phone_number
+        );
+        return futures::future::ok(HttpResponse::BadRequest().body("Invalid phone number"))
+            .responder();
+    }
+
+    let client = authy::Client::new(
+        "https://api.authy.com",
+        &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
+    );
+
+    let verification_code = form.code.clone().unwrap_or("wtf".into());
+
+    // Attempt to verify the verification code
+    let verification_status = phone::check(
+        &client,
+        form.country_code,
+        &form.phone_number,
+        &verification_code,
+    );
+
+    match verification_status {
+        Ok(status) => {
+            // If the verification code was invalid, return an error
+            if !status.success {
+                warn!(
+                    "Invalid verification code, '{}', submitted for '{}' '{}'!",
+                    verification_code, form.country_code, form.phone_number
+                );
+                return futures::future::ok(
+                    HttpResponse::Forbidden().body("Invalid verification code"),
+                )
+                .responder();
+            }
+
+            // Verification was correct
+            info!(
+                "Phone number {} {} verified!",
+                form.country_code, form.phone_number
+            );
+        }
+        Err(e) => {
+            // Something awful happened
+            warn!(
+                "Unable to verify code, '{}', submitted for '{}' '{}'! Error: {}",
+                verification_code, form.country_code, form.phone_number, e
+            );
+            return futures::future::ok(HttpResponse::InternalServerError().into()).responder();
+        }
     }
 
     state
         .db
         .send(LookupIdentiy {
-            identifier: form.identity.clone(),
+            identifier: format!("{}{}", form.country_code, form.phone_number),
         })
         .from_err()
-        .and_then(|res| match res {
-            Ok(ident) => Ok(HttpResponse::Ok().json(ident)),
+        .and_then(move |res| match res {
+            Ok(ident) => {
+                info!(
+                    "Successfully verified identity for person {}",
+                    ident.person_id
+                );
+                Ok(HttpResponse::Ok().json(ident))
+            }
             Err(e) => {
                 error!("{}", e);
                 Ok(HttpResponse::InternalServerError().into())
@@ -230,6 +337,9 @@ fn begin_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureRespons
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
+
+    // Make sure an authy API key is set before starting.
+    let _ = std::env::var("AUTHY_API_KEY").expect("An authy API key is required!");
 
     let sys = actix::System::new("mug-club");
 
@@ -265,6 +375,9 @@ fn main() {
             })
             .resource("/auth", |r| {
                 r.method(http::Method::POST).with_async(begin_auth)
+            })
+            .resource("/auth/verify", |r| {
+                r.method(http::Method::POST).with_async(complete_auth)
             })
     })
     .bind(&listen_addr)

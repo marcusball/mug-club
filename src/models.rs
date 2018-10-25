@@ -82,7 +82,6 @@ pub struct Person {
 #[derive(Serialize, Queryable)]
 pub struct Identity {
     pub identifier: String,
-    pub verified: bool,
     pub person_id: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

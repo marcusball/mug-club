@@ -32,7 +32,6 @@ table! {
 table! {
     identity (identifier) {
         identifier -> Varchar,
-        verified -> Bool,
         person_id -> Int4,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
