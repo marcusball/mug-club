@@ -17,6 +17,9 @@ extern crate failure;
 extern crate failure_derive;
 #[macro_use]
 extern crate log;
+extern crate regex;
+#[macro_use]
+extern crate lazy_static;
 
 mod db;
 mod error;
@@ -28,6 +31,7 @@ use self::db::{
     GetDrinks, LookupIdentiy,
 };
 
+use std::convert::From;
 use std::str::FromStr;
 
 use actix::prelude::*;
@@ -39,7 +43,7 @@ use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use futures::future::Either;
 use futures::Future;
-use std::convert::From;
+use regex::Regex;
 
 struct AppState {
     db: Addr<db::DatabaseExecutor>,
@@ -194,6 +198,19 @@ struct AuthForm {
 }
 
 fn begin_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+    lazy_static! {
+        // See: https://github.com/authy/authy-form-helpers/blob/be2081cd44041ba61173658c100471c8ff7302b9/src/form.authy.js#L693
+        static ref RE: Regex =
+            Regex::new(r"^([0-9][0-9][0-9])\W*([0-9][0-9]{2})\W*([0-9]{0,5})$").unwrap();
+    }
+
+    // Check to make sure that the identity submitted appears to be a phone number
+    if !RE.is_match(&form.identity) {
+        info!("Received invalid phone number '{}'!", form.identity);
+        return futures::future::ok(HttpResponse::BadRequest().body("Invalid phone number"))
+            .responder();
+    }
+
     state
         .db
         .send(LookupIdentiy {
