@@ -375,6 +375,17 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
     .responder()
 }
 
+fn test_auth(person: models::Person) -> impl Responder {
+    #[derive(Serialize)]
+    struct TestResponse {
+        message: String,
+    }
+
+    HttpResponse::Ok().json(TestResponse {
+        message: format!("Hello person {}", person.id),
+    })
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -420,6 +431,7 @@ fn main() {
             .resource("/auth/verify", |r| {
                 r.method(http::Method::POST).with_async(complete_auth)
             })
+            .resource("/auth/test", |r| r.with(test_auth))
     })
     .bind(&listen_addr)
     .unwrap()

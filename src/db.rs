@@ -325,3 +325,61 @@ impl Handler<StartSession> for DatabaseExecutor {
             .get_result::<models::Session>(&conn)?)
     }
 }
+
+/********************************/
+/** Get Session                **/
+/********************************/
+
+pub struct GetSession {
+    pub session_id: String,
+}
+
+impl Message for GetSession {
+    type Result = Result<models::Session>;
+}
+
+impl Handler<GetSession> for DatabaseExecutor {
+    type Result = Result<models::Session>;
+
+    fn handle(&mut self, message: GetSession, _: &mut Self::Context) -> Self::Result {
+        use self::schema::login_session::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        Ok(login_session
+            .filter(id.eq(&message.session_id))
+            .first::<models::Session>(&conn)?)
+    }
+}
+
+/********************************/
+/** Get Logged-in Person       **/
+/********************************/
+
+/// This is a `Message` for getting the current active user
+/// given the peron's `session_id`.
+pub struct GetLoggedInPerson {
+    pub session_id: String,
+}
+
+impl Message for GetLoggedInPerson {
+    type Result = Result<models::Person>;
+}
+
+impl Handler<GetLoggedInPerson> for DatabaseExecutor {
+    type Result = Result<models::Person>;
+
+    fn handle(&mut self, message: GetLoggedInPerson, _: &mut Self::Context) -> Self::Result {
+        use self::schema::login_session::dsl::id as sid;
+        use self::schema::login_session::dsl::login_session;
+        use self::schema::person::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        Ok(person
+            .inner_join(login_session)
+            .filter(sid.eq(&message.session_id))
+            .select((id, created_at, updated_at))
+            .first::<models::Person>(&conn)?)
+    }
+}
