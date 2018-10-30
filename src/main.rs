@@ -54,10 +54,12 @@ fn index(_: &HttpRequest<AppState>) -> impl Responder {
     "Hello World".to_owned()
 }
 
-fn get_drinks(state: State<AppState>) -> FutureResponse<HttpResponse> {
+fn get_drinks((person, state): (models::Person, State<AppState>)) -> FutureResponse<HttpResponse> {
     state
         .db
-        .send(GetDrinks)
+        .send(GetDrinks {
+            person_id: person.id,
+        })
         .from_err()
         .and_then(|res| match res {
             Ok(drinks) => Ok(HttpResponse::Ok().json(drinks)),
@@ -86,6 +88,8 @@ struct DrinkForm {
 
 /// Route handler for creating new drink records
 ///
+/// Requires a valid session token in the `Authorization` header.
+///
 /// Expects the following POST data:
 ///
 /// - `drank_on`: The date on which the drink was had (yyyy-mm-dd).
@@ -95,7 +99,9 @@ struct DrinkForm {
 /// - `comment`: An optional comment about the beer
 ///
 /// If no records correspond to the `beer` or `brewery` names, new records will be created.
-fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
+fn new_drink(
+    (person, details, state): (models::Person, Form<DrinkForm>, State<AppState>),
+) -> FutureResponse<HttpResponse> {
     type DbAddr = Addr<DatabaseExecutor>;
 
     // Save these for later
@@ -177,6 +183,7 @@ fn new_drink((details, state): (Form<DrinkForm>, State<AppState>)) -> FutureResp
         // Finally, insert a record of the individual drink
         .and_then(move |beer| {
             let drink = CreateDrink {
+                person_id: person.id,
                 drank_on: details.drank_on,
                 beer_id: beer.id,
                 rating: details.rating,

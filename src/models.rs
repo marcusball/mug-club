@@ -58,6 +58,7 @@ pub struct NewBeer<'a> {
 #[derive(Serialize, Queryable)]
 pub struct Drink {
     pub id: i32,
+    pub person_id: i32,
     pub drank_on: NaiveDate,
     pub beer_id: i32,
     pub rating: i16,
@@ -69,6 +70,7 @@ pub struct Drink {
 #[derive(Insertable)]
 #[table_name = "drink"]
 pub struct NewDrink<'a> {
+    pub person_id: &'a i32,
     pub drank_on: &'a NaiveDate,
     pub beer_id: &'a i32,
     pub rating: &'a i16,

@@ -20,6 +20,7 @@ table! {
 table! {
     drink (id) {
         id -> Int4,
+        person_id -> Int4,
         drank_on -> Date,
         beer_id -> Int4,
         rating -> Int2,
@@ -58,6 +59,7 @@ table! {
 
 joinable!(beer -> brewery (brewery_id));
 joinable!(drink -> beer (beer_id));
+joinable!(drink -> person (person_id));
 joinable!(identity -> person (person_id));
 joinable!(login_session -> person (person_id));
 

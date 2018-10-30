@@ -37,6 +37,7 @@ impl Actor for DatabaseExecutor {
 /*************************************/
 
 pub struct CreateDrink {
+    pub person_id: i32,
     pub drank_on: NaiveDate,
     pub beer_id: i32,
     pub rating: i16,
@@ -56,6 +57,7 @@ impl Handler<CreateDrink> for DatabaseExecutor {
         let conn = self.get_conn()?;
 
         let new_drink = models::NewDrink {
+            person_id: &message.person_id,
             drank_on: &message.drank_on,
             beer_id: &message.beer_id,
             rating: &message.rating,
@@ -82,7 +84,9 @@ pub struct ExpandedDrink {
     pub comment: Option<String>,
 }
 
-pub struct GetDrinks;
+pub struct GetDrinks {
+    pub person_id: i32,
+}
 
 impl Message for GetDrinks {
     type Result = Result<Vec<ExpandedDrink>>;
@@ -91,7 +95,7 @@ impl Message for GetDrinks {
 impl Handler<GetDrinks> for DatabaseExecutor {
     type Result = Result<Vec<ExpandedDrink>>;
 
-    fn handle(&mut self, _: GetDrinks, _: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, message: GetDrinks, _: &mut Self::Context) -> Self::Result {
         use super::schema::beer;
         use super::schema::beer::dsl::*;
         use super::schema::brewery;
@@ -111,6 +115,7 @@ impl Handler<GetDrinks> for DatabaseExecutor {
                 drink::rating,
                 drink::comment,
             ))
+            .filter(drink::person_id.eq(&message.person_id))
             .load::<ExpandedDrink>(&conn)?)
     }
 }
