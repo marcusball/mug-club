@@ -39,6 +39,7 @@ use actix::prelude::*;
 use actix_web::middleware::{cors, Logger};
 use actix_web::*;
 use actix_web::{server, App, HttpRequest, Responder};
+use authy::AuthyError;
 use chrono::naive::NaiveDate;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
@@ -343,12 +344,41 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
             );
         }
         Err(e) => {
-            // Something awful happened
-            warn!(
-                "Unable to verify code, '{}', submitted for '{}' '{}'! Error: {}",
-                verification_code, form.country_code, form.phone_number, e
-            );
-            return futures::future::ok(HttpResponse::InternalServerError().into()).responder();
+            return match e {
+                // If there was an internal error, that the Authy crate has bubbled up.
+                AuthyError::RequestError(e)
+                | AuthyError::IoError(e)
+                | AuthyError::JsonParseError(e) => {
+                    // Something awful happened
+                    warn!(
+                        "Unable to verify code, '{}', submitted for '{}' '{}'! Error: {}",
+                        verification_code, form.country_code, form.phone_number, e
+                    );
+
+                    futures::future::ok(HttpResponse::InternalServerError().into()).responder()
+                }
+                // If the verification code was incorrect
+                // The Authy crate currently returns this as an Unauthorized API Key error.
+                AuthyError::UnauthorizedKey(_) => {
+                    warn!(
+                        "Invalid verification code, '{}', submitted for '{}' '{}'!",
+                        verification_code, form.country_code, form.phone_number
+                    );
+
+                    futures::future::ok(HttpResponse::Forbidden().body("Invalid verification code"))
+                        .responder()
+                }
+                // If we received some other Authy error response.
+                e => {
+                    warn!(
+                        "Unexpected authy error during verification, '{}', submitted for '{}' '{}'! Error: {}",
+                        verification_code, form.country_code, form.phone_number, e
+                    );
+
+                    futures::future::ok(HttpResponse::Forbidden().body("Invalid verification code"))
+                        .responder()
+                }
+            };
         }
     }
 
