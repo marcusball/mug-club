@@ -28,10 +28,10 @@ mod error;
 mod models;
 mod schema;
 
-use self::api::ApiResponse;
+use self::api::{ApiResponse, ResponseStatus};
 use self::db::{
-    CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, GetBeerByName, GetBreweryByName,
-    GetDrinks, LookupIdentiy, StartSession,
+    CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, ExpandedDrink, GetBeerByName,
+    GetBreweryByName, GetDrink, GetDrinks, LookupIdentiy, StartSession,
 };
 
 use std::convert::From;
@@ -62,6 +62,10 @@ fn index(_: &HttpRequest<AppState>) -> impl Responder {
 }
 
 fn get_drinks((person, state): (models::Person, State<AppState>)) -> FutureResponse<HttpResponse> {
+    #[derive(Serialize)]
+    #[serde(rename = "drinks")]
+    struct Drinks(Vec<ExpandedDrink>);
+
     state
         .db
         .send(GetDrinks {
@@ -69,7 +73,7 @@ fn get_drinks((person, state): (models::Person, State<AppState>)) -> FutureRespo
         })
         .from_err()
         .and_then(|res| match res {
-            Ok(drinks) => Ok(HttpResponse::Ok().json(drinks)),
+            Ok(drinks) => Ok(HttpResponse::Ok().json(ApiResponse::success(Drinks(drinks)))),
             Err(_) => Ok(HttpResponse::InternalServerError().into()),
         })
         .responder()
@@ -116,6 +120,7 @@ fn new_drink(
     let db_addr_copy1 = state.db.clone();
     let db_addr_copy2 = state.db.clone();
     let db_addr_copy3 = state.db.clone();
+    let db_addr_copy4 = state.db.clone();
 
     /*********************************************/
     /*  Closures for database operations         */
@@ -179,6 +184,15 @@ fn new_drink(
             .map_err(|e| actix_web::Error::from(e))
     };
 
+    // Get an ExpandedDrink record by ID
+    let get_drink = |db_addr: DbAddr, drink_id: i32| {
+        db_addr
+            .send(GetDrink { drink_id })
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
     /*********************************************/
     /* Begin actual function execution           */
     /*********************************************/
@@ -199,9 +213,10 @@ fn new_drink(
 
             record_drink(db_addr_copy3, drink)
         })
+        .and_then(move |drink| get_drink(db_addr_copy4, drink.id))
         // Format the result for output
         .then(|res| match res {
-            Ok(drink) => Ok(HttpResponse::Ok().json(drink)),
+            Ok(drink) => Ok(HttpResponse::Ok().json(ApiResponse::success(drink))),
             Err(_) => Ok(HttpResponse::InternalServerError().into()),
         })
         .responder()
@@ -229,8 +244,12 @@ fn begin_auth((form, _state): (Form<AuthForm>, State<AppState>)) -> FutureRespon
             "Received invalid phone number '{}' '{}'!",
             form.country_code, form.phone_number
         );
-        return futures::future::ok(HttpResponse::BadRequest().body("Invalid phone number"))
-            .responder();
+
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Invalid phone number".into());
+
+        return futures::future::ok(HttpResponse::BadRequest().json(response)).responder();
     }
 
     let client = authy::Client::new(
@@ -249,11 +268,18 @@ fn begin_auth((form, _state): (Form<AuthForm>, State<AppState>)) -> FutureRespon
         Ok(res) => res,
         Err(e) => {
             error!("Failed to start phone number verification! Error: {}", e);
-            return futures::future::ok(HttpResponse::InternalServerError().into()).responder();
+
+            let response = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Error)
+                .add_message("That phone number didn't work :(".into());
+
+            return futures::future::ok(HttpResponse::BadRequest().json(response)).responder();
         }
     };
 
-    futures::future::ok(HttpResponse::Ok().body(status.message)).responder()
+    let response = ApiResponse::<()>::from(None).add_message(status.message);
+
+    futures::future::ok(HttpResponse::Ok().json(response)).responder()
 }
 
 fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResponse<HttpResponse> {
@@ -296,8 +322,12 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
     // Make sure some kind of verification code was submitted
     if form.code.is_none() {
         info!("Verification code was submitted!");
-        return futures::future::ok(HttpResponse::BadRequest().body("Missing verification code!"))
-            .responder();
+
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Missing verification code!".into());
+
+        return futures::future::ok(HttpResponse::BadRequest().json(response)).responder();
     }
 
     // Check to make sure that the identity submitted appears to be a phone number
@@ -306,8 +336,12 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
             "Received invalid phone number '{}' '{}'!",
             form.country_code, form.phone_number
         );
-        return futures::future::ok(HttpResponse::BadRequest().body("Invalid phone number"))
-            .responder();
+
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Invalid phone number!".into());
+
+        return futures::future::ok(HttpResponse::BadRequest().json(response)).responder();
     }
 
     /*********************************************/
@@ -337,10 +371,12 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
                     "Invalid verification code, '{}', submitted for '{}' '{}'!",
                     verification_code, form.country_code, form.phone_number
                 );
-                return futures::future::ok(
-                    HttpResponse::Forbidden().body("Invalid verification code"),
-                )
-                .responder();
+
+                let response = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Fail)
+                    .add_message("Invalid verification code".into());
+
+                return futures::future::ok(HttpResponse::Forbidden().json(response)).responder();
             }
 
             // Verification was correct
@@ -361,7 +397,12 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
                         verification_code, form.country_code, form.phone_number, e
                     );
 
-                    futures::future::ok(HttpResponse::InternalServerError().into()).responder()
+                    let response = ApiResponse::<()>::from(None)
+                        .with_status(ResponseStatus::Error)
+                        .add_message("Internal server error".into());
+
+                    futures::future::ok(HttpResponse::InternalServerError().json(response))
+                        .responder()
                 }
                 // If the verification code was incorrect
                 // The Authy crate currently returns this as an Unauthorized API Key error.
@@ -371,8 +412,11 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
                         verification_code, form.country_code, form.phone_number
                     );
 
-                    futures::future::ok(HttpResponse::Forbidden().body("Invalid verification code"))
-                        .responder()
+                    let response = ApiResponse::<()>::from(None)
+                        .with_status(ResponseStatus::Fail)
+                        .add_message("Invalid verification code".into());
+
+                    futures::future::ok(HttpResponse::Forbidden().json(response)).responder()
                 }
                 // If we received some other Authy error response.
                 e => {
@@ -381,8 +425,11 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
                         verification_code, form.country_code, form.phone_number, e
                     );
 
-                    futures::future::ok(HttpResponse::Forbidden().body("Invalid verification code"))
-                        .responder()
+                    let response = ApiResponse::<()>::from(None)
+                        .with_status(ResponseStatus::Fail)
+                        .add_message("Unable to verify the code".into());
+
+                    futures::future::ok(HttpResponse::Forbidden().json(response)).responder()
                 }
             };
         }
@@ -407,12 +454,16 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
                 session.person_id
             );
 
-            Ok(HttpResponse::Ok().json(session))
+            Ok(HttpResponse::Ok().json(ApiResponse::success(session)))
         }
         Err(e) => {
             error!("Failed to start session! Error: {}", e);
 
-            Ok(HttpResponse::InternalServerError().into())
+            let response = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Error)
+                .add_message("Internal server error".into());
+
+            Ok(HttpResponse::InternalServerError().json(response))
         }
     })
     .responder()

@@ -139,6 +139,7 @@ pub struct NewIdentity<'a> {
 }
 
 #[derive(Serialize, Queryable)]
+#[serde(rename = "session")]
 pub struct Session {
     pub id: String,
     pub person_id: i32,

@@ -75,6 +75,7 @@ impl Handler<CreateDrink> for DatabaseExecutor {
 /*************************************/
 
 #[derive(Serialize, Queryable)]
+#[serde(rename = "drink")]
 pub struct ExpandedDrink {
     pub id: i32,
     pub drank_on: NaiveDate,
@@ -117,6 +118,46 @@ impl Handler<GetDrinks> for DatabaseExecutor {
             ))
             .filter(drink::person_id.eq(&message.person_id))
             .load::<ExpandedDrink>(&conn)?)
+    }
+}
+
+/*************************************/
+/** Get Drink message               **/
+/*************************************/
+
+pub struct GetDrink {
+    pub drink_id: i32,
+}
+
+impl Message for GetDrink {
+    type Result = Result<ExpandedDrink>;
+}
+
+impl Handler<GetDrink> for DatabaseExecutor {
+    type Result = Result<ExpandedDrink>;
+
+    fn handle(&mut self, message: GetDrink, _: &mut Self::Context) -> Self::Result {
+        use super::schema::beer;
+        use super::schema::beer::dsl::*;
+        use super::schema::brewery;
+        use super::schema::drink;
+        use super::schema::drink::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        Ok(drink
+            .inner_join(beer)
+            .inner_join(brewery::table.on(beer::brewery_id.eq(brewery::id)))
+            .select((
+                drink::id,
+                drink::drank_on,
+                beer::name,
+                brewery::name,
+                drink::rating,
+                drink::comment,
+            ))
+            .filter(drink::id.eq(&message.drink_id))
+            .first::<ExpandedDrink>(&conn)?)
     }
 }
 
