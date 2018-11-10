@@ -58,7 +58,7 @@ fn index(_: &HttpRequest<AppState>) -> impl Responder {
     #[serde(rename = "message")]
     struct TestResponse(String);
 
-    HttpResponse::Ok().json(ApiResponse::new(TestResponse("Hello world!".into())))
+    HttpResponse::Ok().json(ApiResponse::success(TestResponse("Hello world!".into())))
 }
 
 fn get_drinks((person, state): (models::Person, State<AppState>)) -> FutureResponse<HttpResponse> {
@@ -423,7 +423,7 @@ fn test_auth(person: models::Person) -> impl Responder {
     #[serde(rename = "message")]
     struct TestResponse(String);
 
-    HttpResponse::Ok().json(ApiResponse::new(TestResponse(format!(
+    HttpResponse::Ok().json(ApiResponse::success(TestResponse(format!(
         "Hello person {}",
         person.id
     ))))

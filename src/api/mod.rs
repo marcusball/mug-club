@@ -5,6 +5,7 @@ use serde::ser::{self, Impossible, Serialize, SerializeStruct, SerializeTupleStr
 mod util;
 
 #[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ResponseStatus {
     Success,
     Error,
@@ -24,7 +25,7 @@ where
     T: Serialize,
 {
     pub status: ResponseStatus,
-    pub data: ApiResponseEnvelope<T>,
+    pub data: Option<ApiResponseEnvelope<T>>,
     pub messages: Option<Vec<String>>,
 }
 
@@ -47,11 +48,54 @@ impl<T> ApiResponse<T>
 where
     T: Serialize,
 {
-    pub fn new(data: T) -> ApiResponse<T> {
+    pub fn from(data: Option<T>) -> ApiResponse<T> {
         ApiResponse {
             status: ResponseStatus::Success,
-            data: ApiResponseEnvelope(data),
+            data: data.map(|data| ApiResponseEnvelope(data)),
             messages: None,
         }
+    }
+
+    pub fn success(data: T) -> ApiResponse<T> {
+        ApiResponse {
+            status: ResponseStatus::Success,
+            data: Some(ApiResponseEnvelope(data)),
+            messages: None,
+        }
+    }
+
+    pub fn fail(data: T) -> ApiResponse<T> {
+        ApiResponse {
+            status: ResponseStatus::Fail,
+            data: Some(ApiResponseEnvelope(data)),
+            messages: None,
+        }
+    }
+
+    pub fn error(data: T) -> ApiResponse<T> {
+        ApiResponse {
+            status: ResponseStatus::Error,
+            data: Some(ApiResponseEnvelope(data)),
+            messages: None,
+        }
+    }
+
+    pub fn with_status(mut self, status: ResponseStatus) -> ApiResponse<T> {
+        self.status = status;
+        self
+    }
+
+    pub fn data(mut self, data: T) -> ApiResponse<T> {
+        self.data = Some(ApiResponseEnvelope(data));
+        self
+    }
+
+    pub fn add_message(mut self, message: String) -> ApiResponse<T> {
+        if self.messages.is_none() {
+            self.messages = Some(Vec::new());
+        }
+
+        self.messages.as_mut().unwrap().push(message);
+        self
     }
 }
