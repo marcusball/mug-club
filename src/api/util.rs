@@ -1,7 +1,6 @@
 extern crate serde;
 extern crate serde_derive;
 
-use serde::de::{self, Deserialize, Deserializer, Visitor};
 use serde::ser::{self, Impossible, Serialize, SerializeStruct, SerializeTupleStruct, Serializer};
 use std::fmt::{self, Display};
 
