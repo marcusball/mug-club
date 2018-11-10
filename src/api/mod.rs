@@ -1,6 +1,6 @@
 extern crate serde;
 
-use serde::ser::{self, Impossible, Serialize, SerializeStruct, SerializeTupleStruct, Serializer};
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 mod util;
 
@@ -64,6 +64,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub fn fail(data: T) -> ApiResponse<T> {
         ApiResponse {
             status: ResponseStatus::Fail,
@@ -72,6 +73,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     pub fn error(data: T) -> ApiResponse<T> {
         ApiResponse {
             status: ResponseStatus::Error,
@@ -85,6 +87,7 @@ where
         self
     }
 
+    #[allow(dead_code)]
     pub fn data(mut self, data: T) -> ApiResponse<T> {
         self.data = Some(ApiResponseEnvelope(data));
         self
