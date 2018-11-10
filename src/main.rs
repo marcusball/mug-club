@@ -22,11 +22,13 @@ extern crate regex;
 extern crate lazy_static;
 extern crate textnonce;
 
+mod api;
 mod db;
 mod error;
 mod models;
 mod schema;
 
+use self::api::ApiResponse;
 use self::db::{
     CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, GetBeerByName, GetBreweryByName,
     GetDrinks, LookupIdentiy, StartSession,
@@ -52,7 +54,11 @@ struct AppState {
 }
 
 fn index(_: &HttpRequest<AppState>) -> impl Responder {
-    "Hello World".to_owned()
+    #[derive(Serialize)]
+    #[serde(rename = "message")]
+    struct TestResponse(String);
+
+    HttpResponse::Ok().json(ApiResponse::new(TestResponse("Hello world!".into())))
 }
 
 fn get_drinks((person, state): (models::Person, State<AppState>)) -> FutureResponse<HttpResponse> {
@@ -414,13 +420,13 @@ fn complete_auth((form, state): (Form<AuthForm>, State<AppState>)) -> FutureResp
 
 fn test_auth(person: models::Person) -> impl Responder {
     #[derive(Serialize)]
-    struct TestResponse {
-        message: String,
-    }
+    #[serde(rename = "message")]
+    struct TestResponse(String);
 
-    HttpResponse::Ok().json(TestResponse {
-        message: format!("Hello person {}", person.id),
-    })
+    HttpResponse::Ok().json(ApiResponse::new(TestResponse(format!(
+        "Hello person {}",
+        person.id
+    ))))
 }
 
 fn main() {
