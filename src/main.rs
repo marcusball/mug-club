@@ -30,8 +30,9 @@ mod schema;
 
 use self::api::{ApiResponse, ResponseStatus};
 use self::db::{
-    CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, ExpandedDrink, GetBeerByName,
-    GetBreweryByName, GetDrink, GetDrinks, LookupIdentiy, StartSession,
+    BeerSearchResult, CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, ExpandedDrink,
+    GetBeerByName, GetBreweryByName, GetDrink, GetDrinks, LookupIdentiy, SearchBeerByName,
+    StartSession,
 };
 
 use std::convert::From;
@@ -480,6 +481,43 @@ fn test_auth(person: models::Person) -> impl Responder {
     ))))
 }
 
+#[derive(Deserialize)]
+struct SearchForm {
+    query: String,
+}
+
+fn search_beer(
+    (search_form, state): (Query<SearchForm>, State<AppState>),
+) -> FutureResponse<HttpResponse> {
+    #[derive(Serialize)]
+    #[serde(rename = "beers")]
+    struct SearchResults(Vec<BeerSearchResult>);
+
+    // If the `query` is empty, then return an error
+    if search_form.query.trim().is_empty() {
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Empty search query".into());
+
+        return futures::future::ok(HttpResponse::BadRequest().json(response)).responder();
+    }
+
+    state
+        .db
+        .send(SearchBeerByName {
+            query: search_form.query.clone(),
+        })
+        .from_err()
+        .and_then(|res| match res {
+            Ok(beers) => Ok(HttpResponse::Ok().json(ApiResponse::success(SearchResults(beers)))),
+            Err(e) => {
+                error!("{}", e);
+                Ok(HttpResponse::InternalServerError().into())
+            }
+        })
+        .responder()
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -526,6 +564,9 @@ fn main() {
                 r.method(http::Method::POST).with_async(complete_auth)
             })
             .resource("/auth/test", |r| r.with(test_auth))
+            .resource("/search/beer", |r| {
+                r.method(http::Method::GET).with_async(search_beer)
+            })
     })
     .bind(&listen_addr)
     .unwrap()

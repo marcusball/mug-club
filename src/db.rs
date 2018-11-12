@@ -7,6 +7,7 @@ use diesel;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use failure::Error;
+use regex::Regex;
 use textnonce::TextNonce;
 
 use super::models;
@@ -427,5 +428,102 @@ impl Handler<GetLoggedInPerson> for DatabaseExecutor {
             .filter(sid.eq(&message.session_id))
             .select((id, created_at, updated_at))
             .first::<models::Person>(&conn)?)
+    }
+}
+
+/*************************************/
+/*************************************/
+
+#[derive(Serialize, Queryable)]
+#[serde(rename = "beers")]
+pub struct BeerSearchResult {
+    pub id: i32,
+    pub name: String,
+    pub brewery: String,
+    pub rank: f32,
+}
+
+pub struct SearchBeerByName {
+    pub query: String,
+}
+
+impl Message for SearchBeerByName {
+    type Result = Result<Vec<BeerSearchResult>>;
+}
+
+impl Handler<SearchBeerByName> for DatabaseExecutor {
+    type Result = Result<Vec<BeerSearchResult>>;
+
+    fn handle(&mut self, message: SearchBeerByName, _: &mut Self::Context) -> Self::Result {
+        use super::schema::beer;
+        use super::schema::beer::dsl::*;
+        use super::schema::brewery;
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Float, Text};
+
+        let conn = self.get_conn()?;
+
+        let tsquery = tsquery_string(&message.query);
+
+        let full_name_rank = sql::<Float>(&format!(
+            r#"
+            ts_rank(
+                setweight(to_tsvector('english', beer.name), 'A') || 
+                setweight(to_tsvector('english', brewery.name), 'B'),
+                to_tsquery('english', '{}')
+            ) as rank
+        "#,
+            &tsquery
+        ));
+
+        Ok(beer
+            .inner_join(brewery::table)
+            .group_by((beer::id, brewery::id))
+            .select((beer::id, beer::name, brewery::name, full_name_rank))
+            .order_by(sql::<Text>("rank").desc())
+            .get_results(&conn)?)
+    }
+}
+
+/// Remove all characters that are not alphanumeric or hyphens
+/// then generate a string that may be used in `to_tsquery`.
+///
+/// Each word will be separated have have ":*" appended,
+/// and then joined into a string with all words separated by " <-> ".
+fn tsquery_string(text: &str) -> String {
+    lazy_static! {
+        static ref NON_ALPHANUMERIC: Regex = Regex::new(r"[^\w\s-]").unwrap();
+
+        // This query attempts to permit hypens that actually separate word groups,
+        // without permitting multiple hypens in a row that might result in SQLi.
+        // It's basically selecting one or more alphanumeric groups, possibly followed by a hypen
+        static ref TEXT_GROUPS: Regex = Regex::new(r"((?:[\w]+\-?)+\w{0,})").unwrap();
+    }
+
+    let cleaned = NON_ALPHANUMERIC.replace_all(text, "");
+    TEXT_GROUPS
+        .captures_iter(&cleaned)
+        .map(|cap| format!("{}:*", &cap[1]))
+        .collect::<Vec<String>>()
+        .join(" <-> ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tsquery_string;
+
+    #[test]
+    fn test_tsquery_string() {
+        assert_eq!("test:* <-> beer:*", tsquery_string("test beer"));
+        assert_eq!("test-beer:*", tsquery_string("test-beer"));
+        assert_eq!("test:* <-> beer:*", tsquery_string(r#"test "'/#-- beer"#));
+        assert_eq!(
+            "another-test-beer:*",
+            tsquery_string(r#"another-test-beer"#)
+        );
+
+        assert_eq!("test-:* <-> beer:*", tsquery_string("test--beer"));
+        assert_eq!("test-:*", tsquery_string("test--"));
+        assert_eq!("test-:*", tsquery_string("test-?-"));
     }
 }
