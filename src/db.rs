@@ -485,6 +485,55 @@ impl Handler<SearchBeerByName> for DatabaseExecutor {
     }
 }
 
+/*************************************/
+/*************************************/
+
+#[derive(Serialize, Queryable)]
+#[serde(rename = "breweries")]
+pub struct BrewerySearchResult {
+    pub id: i32,
+    pub name: String,
+    pub rank: f32,
+}
+
+pub struct SearchBreweryByName {
+    pub query: String,
+}
+
+impl Message for SearchBreweryByName {
+    type Result = Result<Vec<BrewerySearchResult>>;
+}
+
+impl Handler<SearchBreweryByName> for DatabaseExecutor {
+    type Result = Result<Vec<BrewerySearchResult>>;
+
+    fn handle(&mut self, message: SearchBreweryByName, _: &mut Self::Context) -> Self::Result {
+        use super::schema::brewery;
+        use super::schema::brewery::dsl::*;
+        use diesel::dsl::sql;
+        use diesel::sql_types::{Float, Text};
+
+        let conn = self.get_conn()?;
+
+        let tsquery = tsquery_string(&message.query);
+
+        let full_name_rank = sql::<Float>(&format!(
+            r#"
+            ts_rank(
+                setweight(to_tsvector('english', brewery.name), 'A'),
+                to_tsquery('english', '{}')
+            ) as rank
+        "#,
+            &tsquery
+        ));
+
+        Ok(brewery
+            .select((brewery::id, brewery::name, full_name_rank))
+            .order_by(sql::<Text>("rank").desc())
+            .get_results(&conn)?)
+    }
+}
+
 /// Remove all characters that are not alphanumeric or hyphens
 /// then generate a string that may be used in `to_tsquery`.
 ///

@@ -30,9 +30,9 @@ mod schema;
 
 use self::api::{ApiResponse, ResponseStatus};
 use self::db::{
-    BeerSearchResult, CreateBeer, CreateBrewery, CreateDrink, DatabaseExecutor, ExpandedDrink,
-    GetBeerByName, GetBreweryByName, GetDrink, GetDrinks, LookupIdentiy, SearchBeerByName,
-    StartSession,
+    BeerSearchResult, BrewerySearchResult, CreateBeer, CreateBrewery, CreateDrink,
+    DatabaseExecutor, ExpandedDrink, GetBeerByName, GetBreweryByName, GetDrink, GetDrinks,
+    LookupIdentiy, SearchBeerByName, SearchBreweryByName, StartSession,
 };
 
 use std::convert::From;
@@ -518,6 +518,40 @@ fn search_beer(
         .responder()
 }
 
+fn search_brewery(
+    (search_form, state): (Query<SearchForm>, State<AppState>),
+) -> FutureResponse<HttpResponse> {
+    #[derive(Serialize)]
+    #[serde(rename = "breweries")]
+    struct SearchResults(Vec<BrewerySearchResult>);
+
+    // If the `query` is empty, then return an error
+    if search_form.query.trim().is_empty() {
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Empty search query".into());
+
+        return futures::future::ok(HttpResponse::BadRequest().json(response)).responder();
+    }
+
+    state
+        .db
+        .send(SearchBreweryByName {
+            query: search_form.query.clone(),
+        })
+        .from_err()
+        .and_then(|res| match res {
+            Ok(breweries) => {
+                Ok(HttpResponse::Ok().json(ApiResponse::success(SearchResults(breweries))))
+            }
+            Err(e) => {
+                error!("{}", e);
+                Ok(HttpResponse::InternalServerError().into())
+            }
+        })
+        .responder()
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -566,6 +600,9 @@ fn main() {
             .resource("/auth/test", |r| r.with(test_auth))
             .resource("/search/beer", |r| {
                 r.method(http::Method::GET).with_async(search_beer)
+            })
+            .resource("/search/brewery", |r| {
+                r.method(http::Method::GET).with_async(search_brewery)
             })
     })
     .bind(&listen_addr)
