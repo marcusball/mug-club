@@ -62,6 +62,15 @@ fn index(_: &HttpRequest<AppState>) -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::success(TestResponse("Hello world!".into())))
 }
 
+// Dummy method. Just wanted a route for the front-end to ping to make up the heroku instance.
+fn wakeup(_: &HttpRequest<AppState>) -> impl Responder {
+    #[derive(Serialize)]
+    #[serde(rename = "message")]
+    struct TestResponse(String);
+
+    HttpResponse::Ok().json(ApiResponse::success(TestResponse("👍".into())))
+}
+
 fn get_drinks((person, state): (models::Person, State<AppState>)) -> FutureResponse<HttpResponse> {
     #[derive(Serialize)]
     #[serde(rename = "drinks")]
@@ -587,6 +596,7 @@ fn main() {
             .middleware(Logger::default())
             .middleware(cors::Cors::build().finish())
             .resource("/", |r| r.h(index))
+            .resource("/wakeup", |r| r.h(wakeup))
             .resource("/drink", |r| {
                 r.method(http::Method::GET).with_async(get_drinks);
                 r.method(http::Method::POST).with_async(new_drink)
