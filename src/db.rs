@@ -118,6 +118,7 @@ impl Handler<GetDrinks> for DatabaseExecutor {
                 drink::comment,
             ))
             .filter(drink::person_id.eq(&message.person_id))
+            .order(drink::drank_on.asc())
             .load::<ExpandedDrink>(&conn)?)
     }
 }
