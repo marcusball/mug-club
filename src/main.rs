@@ -31,8 +31,8 @@ mod schema;
 use self::api::{ApiResponse, ResponseStatus};
 use self::db::{
     BeerSearchResult, BrewerySearchResult, CreateBeer, CreateBrewery, CreateDrink,
-    DatabaseExecutor, ExpandedDrink, GetBeerByName, GetBreweryByName, GetDrink, GetDrinks,
-    LookupIdentiy, SearchBeerByName, SearchBreweryByName, StartSession,
+    DatabaseExecutor, DeleteDrink, ExpandedDrink, GetBeerByName, GetBreweryByName, GetDrink,
+    GetDrinks, LookupIdentiy, SearchBeerByName, SearchBreweryByName, StartSession,
 };
 
 use std::convert::From;
@@ -228,6 +228,61 @@ fn new_drink(
         .then(|res| match res {
             Ok(drink) => Ok(HttpResponse::Ok().json(ApiResponse::success(drink))),
             Err(_) => Ok(HttpResponse::InternalServerError().into()),
+        })
+        .responder()
+}
+
+#[derive(Deserialize)]
+struct DrinkIdForm {
+    id: i32,
+}
+
+fn delete_drink(
+    (person, info, state): (models::Person, Path<DrinkIdForm>, State<AppState>),
+) -> FutureResponse<HttpResponse> {
+    state
+        .db
+        .send(DeleteDrink {
+            drink_id: info.id,
+            person_id: person.id,
+        })
+        .from_err()
+        .and_then(move |res| match res {
+            Ok(0) => {
+                let not_found = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Fail)
+                    .add_message("Could not find that drink".into());
+
+                Ok(HttpResponse::NotFound().json(not_found))
+            }
+            Ok(1) => {
+                let deleted = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Success)
+                    .add_message("Deleted".into());
+
+                Ok(HttpResponse::Ok().json(deleted))
+            }
+            Ok(n) => {
+                error!("Person {} somehow deleted {} drinks!", person.id, n);
+
+                let unexpected_error = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Error)
+                    .add_message("An unexpected error occurred".into());
+
+                Ok(HttpResponse::InternalServerError().json(unexpected_error))
+            }
+            Err(e) => {
+                error!(
+                    "Unable to delete drink for person {}! Error: {}",
+                    person.id, e
+                );
+
+                let unexpected_error = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Error)
+                    .add_message("An unexpected error occurred".into());
+
+                Ok(HttpResponse::InternalServerError().json(unexpected_error))
+            }
         })
         .responder()
 }
@@ -597,9 +652,15 @@ fn main() {
             .middleware(cors::Cors::build().finish())
             .resource("/", |r| r.h(index))
             .resource("/wakeup", |r| r.h(wakeup))
-            .resource("/drink", |r| {
-                r.method(http::Method::GET).with_async(get_drinks);
-                r.method(http::Method::POST).with_async(new_drink)
+            .scope("/drink", |drink_scope| {
+                drink_scope
+                    .resource("", |r| {
+                        r.method(http::Method::GET).with_async(get_drinks);
+                        r.method(http::Method::POST).with_async(new_drink)
+                    })
+                    .resource("/{id}", |r| {
+                        r.method(http::Method::DELETE).with_async(delete_drink)
+                    })
             })
             .resource("/auth", |r| {
                 r.method(http::Method::POST).with_async(begin_auth)

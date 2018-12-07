@@ -164,6 +164,34 @@ impl Handler<GetDrink> for DatabaseExecutor {
 }
 
 /*************************************/
+/** Delete Drink message            **/
+/*************************************/
+
+pub struct DeleteDrink {
+    pub drink_id: i32,
+    pub person_id: i32,
+}
+
+impl Message for DeleteDrink {
+    type Result = Result<usize>;
+}
+
+impl Handler<DeleteDrink> for DatabaseExecutor {
+    type Result = Result<usize>;
+
+    fn handle(&mut self, message: DeleteDrink, _: &mut Self::Context) -> Self::Result {
+        use super::schema::drink::dsl::*;
+
+        let conn = self.get_conn()?;
+
+        Ok(diesel::delete(
+            drink.filter(id.eq(message.drink_id).and(person_id.eq(message.person_id))),
+        )
+        .execute(&conn)?)
+    }
+}
+
+/*************************************/
 /*************************************/
 
 pub struct GetBreweryByName {
