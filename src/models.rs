@@ -107,7 +107,7 @@ impl FromRequest<AppState> for Person {
                     .map_err(|_| ActixError::ErrorBadRequest(Error::SessionNotFound))
             })?;
 
-        Ok(AsyncResult::r#async(Box::new(
+        Ok(AsyncResult::future(Box::new(
             req.state()
                 .db
                 .send(GetLoggedInPerson {
@@ -182,7 +182,7 @@ impl FromRequest<crate::AppState> for Session {
             }
         };
 
-        Ok(AsyncResult::r#async(Box::new(
+        Ok(AsyncResult::future(Box::new(
             req.state()
                 .db
                 .send(GetSession {

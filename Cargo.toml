@@ -2,23 +2,22 @@
 name = "mug-club"
 version = "0.1.0"
 authors = ["Marcus Ball <marcus.ball@live.com>"]
-edition = "2018"
 
 [dependencies]
 actix="0.7" 
 actix-web = "0.7"
-diesel = { version = "1.3.3", features = ["postgres","extras","chrono"] }
+diesel = { version = "1.4.2", features = ["postgres","extras","chrono"] }
 dotenv = "0.13.0"
-failure = "0.1.3"
-failure_derive = "0.1.3"
-futures = "0.1.25"
-env_logger = "0.5.13"
-serde = "1.0.80"
-serde_derive = "1.0.80"
-serde_json = "1.0.32"
+failure = "0.1.5"
+failure_derive = "0.1.5"
+futures = "0.1.26"
+env_logger = "0.6"
+serde = "1.0.90"
+serde_derive = "1.0.90"
+serde_json = "1.0.39"
 chrono = { version = "0.4", features = ["serde"] }
-log = "0.4.5"
-authy = { git = "https://github.com/marcusball/authy-rs.git", branch = "fixes" }
-regex = "1.0"
-lazy_static = "1.1"
+log = "0.4"
+authy = "0.9.8"
+regex = "1.1"
+lazy_static = "1.3"
 textnonce = "0.6"
