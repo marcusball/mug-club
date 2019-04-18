@@ -4,14 +4,14 @@ version: '3.1'
 services:
 
   db:
-    image: postgres
+    image: postgres:11
     restart: always
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - 5432:5432
     volumes:
-      - "database:/var/lib/postgresql/data"
+      - "database11:/var/lib/postgresql/data"
 
   adminer:
     image: adminer
@@ -20,4 +20,4 @@ services:
       - 8080:8080
 
 volumes:
-  database:
+  database11:
