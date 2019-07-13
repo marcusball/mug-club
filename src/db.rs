@@ -80,3 +80,31 @@ impl Query for GetDrinks {
             .load::<ExpandedDrink>(&conn)?)
     }
 }
+
+
+/********************************/
+/** Get Logged-in Person       **/
+/********************************/
+
+/// This is a `Message` for getting the current active user
+/// given the peron's `session_id`.
+#[derive(Clone)]
+pub struct GetLoggedInPerson {
+    pub session_id: String,
+}
+
+impl Query for GetLoggedInPerson {
+    type Item = Result<models::Person>;
+
+    fn execute(&self, conn: Connection) -> Self::Item {
+        use self::schema::login_session::dsl::id as sid;
+        use self::schema::login_session::dsl::login_session;
+        use self::schema::person::dsl::*;
+
+        Ok(person
+            .inner_join(login_session)
+            .filter(sid.eq(&self.session_id))
+            .select((id, created_at, updated_at))
+            .first::<models::Person>(&conn)?)
+    }
+}

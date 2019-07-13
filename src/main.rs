@@ -63,17 +63,25 @@ fn wakeup() -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::success(TestResponse("👍".into())))
 }
 
-fn get_drinks(pool: web::Data<Pool>) -> impl Future<Item = HttpResponse, Error = Error> {
+fn get_drinks(
+    pool: web::Data<Pool>,
+    person: models::Person,
+) -> impl Future<Item = HttpResponse, Error = Error> {
     #[derive(Serialize)]
     #[serde(rename = "drinks")]
     struct Drinks(Vec<ExpandedDrink>);
 
-    db::execute(&pool, GetDrinks { person_id: 1 })
-        .from_err()
-        .and_then(|res| match res {
-            Ok(drinks) => Ok(HttpResponse::Ok().json(ApiResponse::success(Drinks(drinks)))),
-            Err(_) => Ok(HttpResponse::InternalServerError().into()),
-        })
+    db::execute(
+        &pool,
+        GetDrinks {
+            person_id: person.id,
+        },
+    )
+    .from_err()
+    .and_then(|res| match res {
+        Ok(drinks) => Ok(HttpResponse::Ok().json(ApiResponse::success(Drinks(drinks)))),
+        Err(_) => Ok(HttpResponse::InternalServerError().into()),
+    })
 }
 
 fn main() {

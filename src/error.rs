@@ -1,3 +1,4 @@
+use actix_web::Error as ActixError;
 use actix_web::error::{ResponseError, BlockingError};
 use failure::Fail;
 use std::convert::From;
@@ -8,7 +9,10 @@ pub enum Error {
     SessionNotFound,
 
     #[fail(display = "Blocking error")]
-    BlockingError
+    BlockingError,
+
+    #[fail(display = "Server error")]
+    ActixError
 }
 
 impl ResponseError for Error {}
@@ -16,5 +20,10 @@ impl ResponseError for Error {}
 impl<E> From<BlockingError<E>> for Error where E: std::fmt::Debug {
     fn from(e: BlockingError<E>) -> Error {
         Error::BlockingError
+    }
+}
+impl From<ActixError> for Error {
+    fn from(e: ActixError) -> Error {
+        Error::ActixError
     }
 }
