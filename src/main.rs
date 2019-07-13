@@ -1,7 +1,7 @@
 #![allow(proc_macro_derive_resolution_fallback)] // See: https://github.com/diesel-rs/diesel/issues/1785
 
-extern crate actix_web;
 extern crate actix_cors;
+extern crate actix_web;
 extern crate futures;
 extern crate serde;
 extern crate serde_json;
@@ -29,22 +29,22 @@ mod models;
 mod schema;
 
 use self::api::{ApiResponse, ResponseStatus};
+use self::db::{Connection, ExpandedDrink, GetDrinks, Pool};
 
 use std::convert::From;
 use std::str::FromStr;
 
+use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::*;
-use actix_web::{HttpServer, App, HttpRequest, Responder};
-use actix_cors::Cors;
+use actix_web::{App, HttpRequest, HttpServer, Responder};
 use authy::AuthyError;
 use chrono::naive::NaiveDate;
 use diesel::prelude::*;
-use diesel::r2d2::{ConnectionManager, Pool};
+use diesel::r2d2::ConnectionManager;
 use futures::future::Either;
 use futures::Future;
 use regex::Regex;
-
 
 fn index() -> impl Responder {
     #[derive(Serialize)]
@@ -63,25 +63,18 @@ fn wakeup() -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::success(TestResponse("👍".into())))
 }
 
-/*
-fn get_drinks((person, state): (models::Person, State<AppState>)) -> FutureResponse<HttpResponse> {
+fn get_drinks(pool: web::Data<Pool>) -> impl Future<Item = HttpResponse, Error = Error> {
     #[derive(Serialize)]
     #[serde(rename = "drinks")]
     struct Drinks(Vec<ExpandedDrink>);
 
-    state
-        .db
-        .send(GetDrinks {
-            person_id: person.id,
-        })
+    db::execute(&pool, GetDrinks { person_id: 1 })
         .from_err()
         .and_then(|res| match res {
             Ok(drinks) => Ok(HttpResponse::Ok().json(ApiResponse::success(Drinks(drinks)))),
             Err(_) => Ok(HttpResponse::InternalServerError().into()),
         })
-        .responder()
 }
-*/
 
 fn main() {
     dotenv::dotenv().ok();
@@ -103,13 +96,17 @@ fn main() {
 
     // Create a connection pool to the database
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set!");
+    let manager = ConnectionManager::<PgConnection>::new(database_url);
+    let pool = Pool::new(manager).expect("Failed to create database connection pool!");
 
     HttpServer::new(move || {
         App::new()
+            .data(pool.clone())
             .wrap(Logger::default())
             .wrap(Cors::default())
             .route("/", web::get().to(index))
             .route("/wakeup", web::get().to(wakeup))
+            .service(web::scope("/drink").service(web::resource("").to_async(get_drinks)))
     })
     .bind(&listen_addr)
     .unwrap()
