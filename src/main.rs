@@ -13,8 +13,8 @@ extern crate authy;
 extern crate chrono;
 extern crate dotenv;
 extern crate env_logger;
-extern crate failure;
-extern crate failure_derive;
+#[macro_use]
+extern crate derive_more;
 #[macro_use]
 extern crate log;
 extern crate regex;

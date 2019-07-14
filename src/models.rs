@@ -1,7 +1,7 @@
 #![allow(proc_macro_derive_resolution_fallback)] // See: https://github.com/diesel-rs/diesel/issues/1785
 extern crate chrono;
 
-use crate::error::Error;
+use crate::error::{Error, Result};
 use crate::schema::*;
 use actix_web::Error as ActixError;
 use actix_web::{FromRequest, HttpMessage, HttpRequest};

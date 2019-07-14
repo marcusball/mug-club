@@ -5,7 +5,6 @@ use chrono::{Duration, Utc};
 use diesel;
 use diesel::prelude::*;
 use diesel::r2d2;
-use failure::Error;
 use futures::future::Future;
 use regex::Regex;
 use textnonce::TextNonce;
@@ -14,8 +13,8 @@ use std::marker::Send;
 
 use super::models;
 use super::schema;
+use super::error::{Error, Result};
 
-type Result<T> = ::std::result::Result<T, Error>;
 pub type Pool = r2d2::Pool<r2d2::ConnectionManager<PgConnection>>;
 pub type Connection = r2d2::PooledConnection<r2d2::ConnectionManager<PgConnection>>;
 
@@ -32,7 +31,7 @@ pub trait Query {
 pub fn execute<T: Query + Send + Clone + 'static>(
     pool: &Pool,
     query: T,
-) -> impl Future<Item = T::Item, Error = AWError> {
+) -> impl Future<Item = T::Item, Error = Error> {
     let pool = pool.clone();
 
     web::block::<_, _, Error>(move || Ok(query.execute(pool.get()?))).from_err()
