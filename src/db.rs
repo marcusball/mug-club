@@ -23,15 +23,15 @@ pub type Connection = r2d2::PooledConnection<r2d2::ConnectionManager<PgConnectio
 sql_function!(lower, lower_t, (a: diesel::types::VarChar) -> diesel::types::VarChar);
 
 pub trait Query {
-    type Item: Send;
+    type Result: Send;
 
-    fn execute(&self, conn: Connection) -> Self::Item;
+    fn execute(&self, conn: Connection) -> Self::Result;
 }
 
 pub fn execute<T: Query + Send + Clone + 'static>(
     pool: &Pool,
     query: T,
-) -> impl Future<Item = T::Item, Error = Error> {
+) -> impl Future<Item = T::Result, Error = Error> {
     let pool = pool.clone();
 
     web::block::<_, _, Error>(move || Ok(query.execute(pool.get()?))).from_err()
@@ -61,9 +61,9 @@ pub struct CreateDrink {
 }
 
 impl Query for CreateDrink {
-    type Item = Result<models::Drink>;
+    type Result = Result<models::Drink>;
 
-    fn execute(&self, conn: Connection) -> Self::Item {
+    fn execute(&self, conn: Connection) -> Self::Result {
         use self::schema::drink::dsl::*;
 
         let new_drink = models::NewDrink {
@@ -90,9 +90,9 @@ pub struct GetDrinks {
 }
 
 impl Query for GetDrinks {
-    type Item = Result<Vec<ExpandedDrink>>;
+    type Result = Result<Vec<ExpandedDrink>>;
 
-    fn execute(&self, conn: Connection) -> Self::Item {
+    fn execute(&self, conn: Connection) -> Self::Result {
         use super::schema::beer;
         use super::schema::beer::dsl::*;
         use super::schema::brewery;
@@ -134,9 +134,9 @@ impl GetLoggedInPerson {
 }
 
 impl Query for GetLoggedInPerson {
-    type Item = Result<models::Person>;
+    type Result = Result<models::Person>;
 
-    fn execute(&self, conn: Connection) -> Self::Item {
+    fn execute(&self, conn: Connection) -> Self::Result {
         use self::schema::login_session::dsl::id as sid;
         use self::schema::login_session::dsl::login_session;
         use self::schema::person::dsl::*;
