@@ -116,6 +116,62 @@ impl Query for GetDrinks {
     }
 }
 
+/*************************************/
+/** Get Drink message               **/
+/*************************************/
+
+pub struct GetDrink {
+    pub drink_id: i32,
+}
+
+impl Query for GetDrink {
+    type Result = Result<ExpandedDrink>;
+
+    fn execute(&self, conn: Connection) -> Self::Result {
+        use super::schema::beer;
+        use super::schema::beer::dsl::*;
+        use super::schema::brewery;
+        use super::schema::drink;
+        use super::schema::drink::dsl::*;
+        
+        Ok(drink
+            .inner_join(beer)
+            .inner_join(brewery::table.on(beer::brewery_id.eq(brewery::id)))
+            .select((
+                drink::id,
+                drink::drank_on,
+                beer::name,
+                brewery::name,
+                drink::rating,
+                drink::comment,
+            ))
+            .filter(drink::id.eq(&self.drink_id))
+            .first::<ExpandedDrink>(&conn)?)
+    }
+}
+
+/*************************************/
+/** Delete Drink message            **/
+/*************************************/
+
+pub struct DeleteDrink {
+    pub drink_id: i32,
+    pub person_id: i32,
+}
+
+impl Query for DeleteDrink {
+    type Result = Result<usize>;
+
+    fn execute(&self, conn: Connection) -> Self::Result {
+        use super::schema::drink::dsl::*;
+
+        Ok(diesel::delete(
+            drink.filter(id.eq(self.drink_id).and(person_id.eq(self.person_id))),
+        )
+        .execute(&conn)?)
+    }
+}
+
 /********************************/
 /** Get Logged-in Person       **/
 /********************************/
