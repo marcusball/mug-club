@@ -103,10 +103,8 @@ impl FromRequest for Person {
 
     fn from_request(req: &HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
         use crate::db::GetLoggedInPerson;
-        use crate::error::Error;
         use actix_web::error as awerror;
         use actix_web::http::header::AUTHORIZATION;
-        use diesel::result::Error as DieselError;
 
         let pool = req
             .app_data::<crate::db::Pool>()
