@@ -48,6 +48,42 @@ pub struct ExpandedDrink {
     pub comment: Option<String>,
 }
 
+/*************************************/
+/** Create Drink message            **/
+/*************************************/
+
+pub struct CreateDrink {
+    pub person_id: i32,
+    pub drank_on: NaiveDate,
+    pub beer_id: i32,
+    pub rating: i16,
+    pub comment: Option<String>,
+}
+
+impl Query for CreateDrink {
+    type Item = Result<models::Drink>;
+
+    fn execute(&self, conn: Connection) -> Self::Item {
+        use self::schema::drink::dsl::*;
+
+        let new_drink = models::NewDrink {
+            person_id: &self.person_id,
+            drank_on: &self.drank_on,
+            beer_id: &self.beer_id,
+            rating: &self.rating,
+            comment: self.comment.as_ref(),
+        };
+
+        Ok(diesel::insert_into(drink)
+            .values(&new_drink)
+            .get_result(&conn)?)
+    }
+}
+
+/*************************************/
+/** Get Drinks query                **/
+/*************************************/
+
 #[derive(Clone)]
 pub struct GetDrinks {
     pub person_id: i32,
