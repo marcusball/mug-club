@@ -124,22 +124,18 @@ impl FromRequest for Person {
         };
 
         FuturePerson(Box::new(
-            crate::db::execute(
-                &pool,
-                GetLoggedInPerson {
-                    session_id: auth.to_string(),
-                },
-            )
-            .from_err()
-            .and_then(|r| match r {
-                Ok(person) => futures::future::ok(person),
-                Err(e) => futures::future::err(match e {
-                    // If it's a Diesel error, then it's most likely just a record not found.
-                    Error::DieselError(e) => awerror::ErrorUnauthorized(e),
-                    // If it's any other kind of error, treat it like an Internal Server Error.
-                    e => awerror::ErrorInternalServerError(e),
+            crate::db::execute(&pool, GetLoggedInPerson::from_session(auth.to_string()))
+                .from_err()
+                .and_then(|r| match r {
+                    Ok(person) => futures::future::ok(person),
+                    Err(e) => futures::future::err(match e {
+                        // If it's a Diesel error, then it's most likely just a record not found.
+                        Error::DieselError(e) => awerror::ErrorUnauthorized(e),
+                        Error::PoolError(e) => awerror::ErrorServiceUnavailable(e),
+                        // If it's any other kind of error, treat it like an Internal Server Error.
+                        e => awerror::ErrorInternalServerError(e),
+                    }),
                 }),
-            }),
         ))
     }
 }

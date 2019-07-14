@@ -11,9 +11,9 @@ use textnonce::TextNonce;
 
 use std::marker::Send;
 
+use super::error::{Error, Result};
 use super::models;
 use super::schema;
-use super::error::{Error, Result};
 
 pub type Pool = r2d2::Pool<r2d2::ConnectionManager<PgConnection>>;
 pub type Connection = r2d2::PooledConnection<r2d2::ConnectionManager<PgConnection>>;
@@ -80,7 +80,6 @@ impl Query for GetDrinks {
     }
 }
 
-
 /********************************/
 /** Get Logged-in Person       **/
 /********************************/
@@ -90,6 +89,12 @@ impl Query for GetDrinks {
 #[derive(Clone)]
 pub struct GetLoggedInPerson {
     pub session_id: String,
+}
+
+impl GetLoggedInPerson {
+    pub fn from_session(session_id: String) -> GetLoggedInPerson {
+        GetLoggedInPerson { session_id }
+    }
 }
 
 impl Query for GetLoggedInPerson {
