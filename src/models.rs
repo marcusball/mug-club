@@ -85,11 +85,11 @@ pub struct Person {
     pub updated_at: DateTime<Utc>,
 }
 
-pub struct FuturePerson(Box<dyn Future<Item = Person, Error = Error>>);
+pub struct FuturePerson(Box<dyn Future<Item = Person, Error = ActixError>>);
 
 impl futures::future::Future for FuturePerson {
     type Item = Person;
-    type Error = Error;
+    type Error = ActixError;
 
     fn poll(&mut self) -> futures::Poll<Self::Item, Self::Error> {
         self.0.poll()
@@ -97,7 +97,7 @@ impl futures::future::Future for FuturePerson {
 }
 
 impl FromRequest for Person {
-    type Error = Error;
+    type Error = ActixError;
     type Config = ();
     type Future = FuturePerson;
 
@@ -115,8 +115,8 @@ impl FromRequest for Person {
         let auth = req
             .headers()
             .get(AUTHORIZATION)
-            .ok_or(Error::SessionNotFound)
-            .and_then(|h| h.to_str().map_err(|_| Error::SessionNotFound));
+            .ok_or(awerror::ErrorUnauthorized(Error::SessionNotFound))
+            .and_then(|h| h.to_str().map_err(|e| awerror::ErrorBadRequest(e)));
 
         let auth = match auth {
             Ok(auth) => auth,
@@ -133,7 +133,12 @@ impl FromRequest for Person {
             .from_err()
             .and_then(|r| match r {
                 Ok(person) => futures::future::ok(person),
-                Err(e) => futures::future::err(Error::SessionNotFound),
+                Err(e) => futures::future::err(match e {
+                    // If it's a Diesel error, then it's most likely just a record not found.
+                    Error::DieselError(e) => awerror::ErrorUnauthorized(e),
+                    // If it's any other kind of error, treat it like an Internal Server Error.
+                    e => awerror::ErrorInternalServerError(e),
+                }),
             }),
         ))
     }
