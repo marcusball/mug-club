@@ -28,7 +28,7 @@ pub trait Query {
     fn execute(&self, conn: Connection) -> Self::Result;
 }
 
-pub fn execute<T: Query + Send + Clone + 'static>(
+pub fn execute<T: Query + Send + 'static>(
     pool: &Pool,
     query: T,
 ) -> impl Future<Item = T::Result, Error = Error> {
