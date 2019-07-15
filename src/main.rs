@@ -29,7 +29,10 @@ mod models;
 mod schema;
 
 use self::api::{ApiResponse, ResponseStatus};
-use self::db::{Connection, ExpandedDrink, GetDrinks, Pool};
+use self::db::{
+    Connection, CreateBeer, CreateBrewery, CreateDrink, ExpandedDrink, GetBeerByName,
+    GetBreweryByName, GetDrink, GetDrinks, Pool,
+};
 
 use std::convert::From;
 use std::str::FromStr;
@@ -84,6 +87,146 @@ fn get_drinks(
     })
 }
 
+#[derive(Deserialize)]
+struct DrinkForm {
+    /// Date on which the drink was had.
+    drank_on: NaiveDate,
+
+    /// The name of the beer.
+    beer: String,
+
+    /// The name of the beer's brewery.
+    brewery: String,
+
+    /// Rating of the beer.
+    rating: i16,
+
+    /// A comment/opinion about the beer.
+    comment: Option<String>,
+}
+
+/// Route handler for creating new drink records
+///
+/// Requires a valid session token in the `Authorization` header.
+///
+/// Expects the following POST data:
+///
+/// - `drank_on`: The date on which the drink was had (yyyy-mm-dd).
+/// - `beer`: The name of the beer
+/// - `brewery`: The name of the brewery
+/// - `rating`: The rating of the beer, 0 - 5
+/// - `comment`: An optional comment about the beer
+///
+/// If no records correspond to the `beer` or `brewery` names, new records will be created.
+fn new_drink(
+    pool: web::Data<Pool>,
+    person: models::Person,
+    details: web::Form<DrinkForm>,
+) -> impl Future<Item = HttpResponse, Error = Error> {
+    // Save these for later
+    let beer_name = details.beer.clone();
+
+    /*********************************************/
+    /*  Closures for database operations         */
+    /*********************************************/
+
+    // This closure will create a new brewery record with the given `name`.
+    let create_brewery = |pool: &Pool, name: String| {
+        db::execute(pool, CreateBrewery { name: name })
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    // This closure will create a new beer record, given a `name` and its `brewery_id`.
+    let create_beer = |pool: &Pool, name: String, brewery_id: i32| {
+        db::execute(pool, CreateBeer { name, brewery_id })
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    // This closure will lookup a brewery given its `name` and,
+    // if no matching record is found, will insert a new one.
+    let get_brewery = |pool: &Pool, name: String| {
+        let pool_clone = pool.clone();
+        db::execute(pool, GetBreweryByName { name: name.clone() })
+            .from_err::<Error>()
+            .map(move |res| match res {
+                Ok(Some(brewery)) => Either::A(futures::future::result(Ok(brewery))),
+                Ok(None) => Either::B(create_brewery(&pool_clone, name)),
+                Err(e) => Either::A(futures::future::result(Err(actix_web::Error::from(e)))),
+            })
+            .from_err::<actix_web::Error>()
+            .flatten()
+    };
+
+    // This closure will lookup a beer given its `name` and `brewery_id` and,
+    // will insert a new one if no record is found.
+    let get_beer = move |pool: &Pool, name: String, brewery_id: i32| {
+        let pool_clone = pool.clone();
+        db::execute(
+            pool,
+            GetBeerByName {
+                name: name.clone(),
+                brewery_id: brewery_id,
+            },
+        )
+        .from_err()
+        .and_then(move |res| match res {
+            Ok(Some(beer)) => Either::A(futures::future::result(Ok(beer))),
+            Ok(None) => Either::B(create_beer(&pool_clone, name, brewery_id)),
+            Err(e) => Either::A(futures::future::result(Err(actix_web::Error::from(e)))),
+        })
+    };
+
+    // This will insert a new Drink record
+    let record_drink = |pool: &Pool, drink: CreateDrink| {
+        db::execute(pool, drink)
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    // Get an ExpandedDrink record by ID
+    let get_drink = |pool: &Pool, drink_id: i32| {
+        db::execute(pool, GetDrink { drink_id })
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    /*********************************************/
+    /* Begin actual function execution           */
+    /*********************************************/
+
+    let pool_clone_1 = pool.clone();
+    let pool_clone_2 = pool.clone();
+
+    // Look up the given brewery, and create a new record if one is not found
+    get_brewery(&pool, details.brewery.clone())
+        // Then lookup the beer by name, and create a new record if it is not found.
+        .and_then(move |brewery| get_beer(&pool, beer_name, brewery.id))
+        // Finally, insert a record of the individual drink
+        .and_then(move |beer| {
+            let drink = CreateDrink {
+                person_id: person.id,
+                drank_on: details.drank_on,
+                beer_id: beer.id,
+                rating: details.rating,
+                comment: details.comment.clone(),
+            };
+
+            record_drink(&pool_clone_1, drink)
+        })
+        .and_then(move |drink| get_drink(&pool_clone_2, drink.id))
+        // Format the result for output
+        .then(|res| match res {
+            Ok(drink) => Ok(HttpResponse::Ok().json(ApiResponse::success(drink))),
+            Err(_) => Ok(HttpResponse::InternalServerError().into()),
+        })
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -114,7 +257,11 @@ fn main() {
             .wrap(Cors::default())
             .route("/", web::get().to(index))
             .route("/wakeup", web::get().to(wakeup))
-            .service(web::scope("/drink").service(web::resource("").to_async(get_drinks)))
+            .service(
+                web::resource("/drink")
+                    .route(web::get().to_async(get_drinks))
+                    .route(web::post().to_async(new_drink)),
+            )
     })
     .bind(&listen_addr)
     .unwrap()
