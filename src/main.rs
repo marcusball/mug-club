@@ -30,7 +30,7 @@ mod schema;
 
 use self::api::{ApiResponse, ResponseStatus};
 use self::db::{
-    Connection, CreateBeer, CreateBrewery, CreateDrink, ExpandedDrink, GetBeerByName,
+    Connection, CreateBeer, CreateBrewery, CreateDrink, DeleteDrink, ExpandedDrink, GetBeerByName,
     GetBreweryByName, GetDrink, GetDrinks, Pool,
 };
 
@@ -227,6 +227,63 @@ fn new_drink(
         })
 }
 
+#[derive(Deserialize)]
+struct DrinkIdForm {
+    id: i32,
+}
+
+fn delete_drink(
+    person: models::Person,
+    info: web::Path<DrinkIdForm>,
+    pool: web::Data<Pool>,
+) -> impl Future<Item = HttpResponse, Error = Error> {
+    db::execute(
+        &pool,
+        DeleteDrink {
+            drink_id: info.id,
+            person_id: person.id,
+        },
+    )
+    .from_err()
+    .and_then(move |res| match res {
+        Ok(0) => {
+            let not_found = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Fail)
+                .add_message("Could not find that drink".into());
+
+            Ok(HttpResponse::NotFound().json(not_found))
+        }
+        Ok(1) => {
+            let deleted = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Success)
+                .add_message("Deleted".into());
+
+            Ok(HttpResponse::Ok().json(deleted))
+        }
+        Ok(n) => {
+            error!("Person {} somehow deleted {} drinks!", person.id, n);
+
+            let unexpected_error = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Error)
+                .add_message("An unexpected error occurred".into());
+
+            Ok(HttpResponse::InternalServerError().json(unexpected_error))
+        }
+        Err(e) => {
+            error!(
+                "Unable to delete drink for person {}! Error: {}",
+                person.id, e
+            );
+
+            let unexpected_error = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Error)
+                .add_message("An unexpected error occurred".into());
+
+            Ok(HttpResponse::InternalServerError().json(unexpected_error))
+        }
+    })
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -258,9 +315,15 @@ fn main() {
             .route("/", web::get().to(index))
             .route("/wakeup", web::get().to(wakeup))
             .service(
-                web::resource("/drink")
-                    .route(web::get().to_async(get_drinks))
-                    .route(web::post().to_async(new_drink)),
+                web::scope("/drink").service(
+                    web::resource("")
+                        .route(web::get().to_async(get_drinks))
+                        .route(web::post().to_async(new_drink)),
+                )
+                .service(
+                    web::resource("/{id}")
+                        .route(web::delete().to_async(delete_drink))
+                ),
             )
     })
     .bind(&listen_addr)
