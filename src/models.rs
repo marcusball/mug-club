@@ -1,16 +1,13 @@
 #![allow(proc_macro_derive_resolution_fallback)] // See: https://github.com/diesel-rs/diesel/issues/1785
-extern crate actix;
 extern crate chrono;
 
-use actix::prelude::*;
-use actix_web::dev::AsyncResult;
-use actix_web::error as ActixError;
+use crate::error::{Error, Result};
+use crate::schema::*;
+use actix_web::Error as ActixError;
 use actix_web::{FromRequest, HttpMessage, HttpRequest};
 use chrono::naive::NaiveDate;
 use chrono::{DateTime, Utc};
-use crate::schema::*;
-use crate::AppState;
-use futures::Future;
+use futures::future::Future;
 
 #[derive(Serialize, Queryable)]
 
@@ -88,38 +85,56 @@ pub struct Person {
     pub updated_at: DateTime<Utc>,
 }
 
-impl FromRequest<AppState> for Person {
-    type Config = ();
-    type Result = Result<AsyncResult<Self>, ActixError::Error>;
+pub struct FuturePerson(Box<dyn Future<Item = Person, Error = ActixError>>);
 
-    fn from_request(req: &HttpRequest<AppState>, _cfg: &Self::Config) -> Self::Result {
-        use actix_web::http::header::AUTHORIZATION;
+impl futures::future::Future for FuturePerson {
+    type Item = Person;
+    type Error = ActixError;
+
+    fn poll(&mut self) -> futures::Poll<Self::Item, Self::Error> {
+        self.0.poll()
+    }
+}
+
+impl FromRequest for Person {
+    type Error = ActixError;
+    type Config = ();
+    type Future = FuturePerson;
+
+    fn from_request(req: &HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
         use crate::db::GetLoggedInPerson;
-        use crate::error::Error;
-        use diesel::result::Error as DieselError;
+        use actix_web::error as awerror;
+        use actix_web::http::header::AUTHORIZATION;
+
+        let pool = req
+            .app_data::<crate::db::Pool>()
+            .expect("Failed to access database pool!");
 
         let auth = req
             .headers()
             .get(AUTHORIZATION)
-            .ok_or(ActixError::ErrorUnauthorized(Error::SessionNotFound))
-            .and_then(|h| {
-                h.to_str()
-                    .map_err(|_| ActixError::ErrorBadRequest(Error::SessionNotFound))
-            })?;
+            .ok_or(awerror::ErrorUnauthorized(Error::SessionNotFound))
+            .and_then(|h| h.to_str().map_err(|e| awerror::ErrorBadRequest(e)));
 
-        Ok(AsyncResult::future(Box::new(
-            req.state()
-                .db
-                .send(GetLoggedInPerson {
-                    session_id: auth.to_string(),
-                })
+        let auth = match auth {
+            Ok(auth) => auth,
+            Err(e) => return FuturePerson(Box::new(futures::future::err(e))),
+        };
+
+        FuturePerson(Box::new(
+            crate::db::execute(&pool, GetLoggedInPerson::from_session(auth.to_string()))
                 .from_err()
-                .and_then(|s| s)
-                .map_err(|e| match e.downcast::<DieselError>() {
-                    Ok(e) => ActixError::ErrorUnauthorized(e),
-                    Err(e) => ActixError::ErrorInternalServerError(e),
+                .and_then(|r| match r {
+                    Ok(person) => futures::future::ok(person),
+                    Err(e) => futures::future::err(match e {
+                        // If it's a Diesel error, then it's most likely just a record not found.
+                        Error::DieselError(e) => awerror::ErrorUnauthorized(e),
+                        Error::PoolError(e) => awerror::ErrorServiceUnavailable(e),
+                        // If it's any other kind of error, treat it like an Internal Server Error.
+                        e => awerror::ErrorInternalServerError(e),
+                    }),
                 }),
-        )))
+        ))
     }
 }
 
@@ -159,44 +174,3 @@ pub struct NewSession<'a> {
 /*********************/
 /* Login Sessions    */
 /*********************/
-
-impl FromRequest<crate::AppState> for Session {
-    type Config = ();
-    type Result = Result<AsyncResult<Self>, ::actix_web::error::Error>;
-
-    fn from_request(req: &HttpRequest<crate::AppState>, _cfg: &Self::Config) -> Self::Result {
-        use actix_web::http::header::AUTHORIZATION;
-        use crate::db::GetSession;
-        use crate::error::Error;
-
-        let auth = req.headers().get(AUTHORIZATION);
-
-        if auth.is_none() {
-            return Err(ActixError::ErrorUnauthorized(Error::SessionNotFound));
-        }
-
-        let auth = match auth.unwrap().to_str() {
-            Ok(val) => val,
-            Err(_) => {
-                return Err(ActixError::ErrorBadRequest(Error::SessionNotFound));
-            }
-        };
-
-        Ok(AsyncResult::future(Box::new(
-            req.state()
-                .db
-                .send(GetSession {
-                    session_id: auth.to_string(),
-                })
-                .from_err()
-                .and_then(|s| s)
-                .map_err(|e| match e.downcast::<::diesel::result::Error>() {
-                    Ok(e) => ActixError::ErrorUnauthorized(e),
-                    Err(e) => {
-                        println!("{:?}", e);
-                        ActixError::ErrorInternalServerError(e)
-                    }
-                }),
-        )))
-    }
-}
