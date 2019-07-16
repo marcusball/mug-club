@@ -1,6 +1,7 @@
 #![allow(proc_macro_derive_resolution_fallback)] // See: https://github.com/diesel-rs/diesel/issues/1785
 
 extern crate actix_cors;
+extern crate actix_rt;
 extern crate actix_web;
 extern crate futures;
 extern crate serde;
@@ -657,6 +658,8 @@ fn main() {
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     let pool = Pool::new(manager).expect("Failed to create database connection pool!");
 
+    let sys = actix_rt::System::new("http-server");
+
     HttpServer::new(move || {
         App::new()
             .data(pool.clone())
@@ -687,6 +690,9 @@ fn main() {
     })
     .bind(&listen_addr)
     .unwrap()
-    .run()
-    .unwrap();
+    .start();
+
+    info!("Listening on {}", listen_addr);
+
+    let _ = sys.run();
 }

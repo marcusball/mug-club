@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Marcus Ball <marcus.ball@live.com>"]
 
 [dependencies]
+actix-rt = "0.2.3"
 actix-web = "1.0.3"
 actix-cors = "0.1.0"
 diesel = { version = "1.4.2", features = ["postgres","extras","chrono"] }
