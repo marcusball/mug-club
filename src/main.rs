@@ -31,7 +31,7 @@ mod schema;
 use self::api::{ApiResponse, ResponseStatus};
 use self::db::{
     Connection, CreateBeer, CreateBrewery, CreateDrink, DeleteDrink, ExpandedDrink, GetBeerByName,
-    GetBreweryByName, GetDrink, GetDrinks, Pool,
+    GetBreweryByName, GetDrink, GetDrinks, LookupIdentiy, Pool, StartSession,
 };
 
 use std::convert::From;
@@ -284,6 +284,263 @@ fn delete_drink(
     })
 }
 
+#[derive(Deserialize)]
+struct AuthForm {
+    country_code: u16,
+    phone_number: String,
+    code: Option<String>,
+}
+
+fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Error = Error> {
+    use authy::api::phone;
+
+    lazy_static! {
+        // See: https://github.com/authy/authy-form-helpers/blob/be2081cd44041ba61173658c100471c8ff7302b9/src/form.authy.js#L693
+        static ref RE: Regex =
+            Regex::new(r"^([0-9][0-9][0-9])\W*([0-9][0-9]{2})\W*([0-9]{0,5})$").unwrap();
+    }
+
+    // Check to make sure that the identity submitted appears to be a phone number
+    if !RE.is_match(&form.phone_number) {
+        info!(
+            "Received invalid phone number '{}' '{}'!",
+            form.country_code, form.phone_number
+        );
+
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Invalid phone number".into());
+
+        return futures::future::ok(HttpResponse::BadRequest().json(response));
+    }
+
+    let client = authy::Client::new(
+        "https://api.authy.com",
+        &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
+    );
+
+    let (status, _start) = match phone::start(
+        &client,
+        phone::ContactType::SMS,
+        form.country_code,
+        &form.phone_number,
+        Some(6),
+        None,
+    ) {
+        Ok(res) => res,
+        Err(e) => {
+            error!("Failed to start phone number verification! Error: {}", e);
+
+            let response = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Error)
+                .add_message("That phone number didn't work :(".into());
+
+            return futures::future::ok(HttpResponse::BadRequest().json(response));
+        }
+    };
+
+    let response = ApiResponse::<()>::from(None).add_message(status.message);
+
+    futures::future::ok(HttpResponse::Ok().json(response))
+}
+
+fn complete_auth(
+    form: web::Form<AuthForm>,
+    pool: web::Data<Pool>,
+) -> impl Future<Item = HttpResponse, Error = Error> {
+    use authy::api::phone;
+
+    /*********************************************/
+    /*  Closures for database operations         */
+    /*********************************************/
+
+    let lookup_idenity = |pool: &Pool, country_code: u16, phone_number: String| {
+        db::execute(
+            pool,
+            LookupIdentiy {
+                identifier: format!("{}{}", country_code, phone_number),
+            },
+        )
+        .from_err()
+        .and_then(|res| res)
+        .map_err(|e| actix_web::Error::from(e))
+    };
+
+    let start_session = |pool: &Pool, person_id: i32| {
+        db::execute(pool, StartSession { person_id })
+            .from_err()
+            .and_then(|res| res)
+            .map_err(|e| actix_web::Error::from(e))
+    };
+
+    /*********************************************/
+    /*  Begin request handling logic             */
+    /*********************************************/
+
+    lazy_static! {
+        // See: https://github.com/authy/authy-form-helpers/blob/be2081cd44041ba61173658c100471c8ff7302b9/src/form.authy.js#L693
+        static ref RE: Regex =
+            Regex::new(r"^([0-9][0-9][0-9])\W*([0-9][0-9]{2})\W*([0-9]{0,5})$").unwrap();
+    }
+
+    // Make sure some kind of verification code was submitted
+    if form.code.is_none() {
+        info!("Verification code was submitted!");
+
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Missing verification code!".into());
+
+        return Either::A(futures::future::ok(
+            HttpResponse::BadRequest().json(response),
+        ));
+    }
+
+    // Check to make sure that the identity submitted appears to be a phone number
+    if !RE.is_match(&form.phone_number) {
+        info!(
+            "Received invalid phone number '{}' '{}'!",
+            form.country_code, form.phone_number
+        );
+
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Invalid phone number!".into());
+
+        return Either::A(futures::future::ok(
+            HttpResponse::BadRequest().json(response),
+        ));
+    }
+
+    /*********************************************/
+    /*  Verify the phone number and code         */
+    /*********************************************/
+
+    let client = authy::Client::new(
+        "https://api.authy.com",
+        &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
+    );
+
+    let verification_code = form.code.clone().unwrap_or("wtf".into());
+
+    // Attempt to verify the verification code
+    let verification_status = phone::check(
+        &client,
+        form.country_code,
+        &form.phone_number,
+        &verification_code,
+    );
+
+    match verification_status {
+        Ok(status) => {
+            // If the verification code was invalid, return an error
+            if !status.success {
+                warn!(
+                    "Invalid verification code, '{}', submitted for '{}' '{}'!",
+                    verification_code, form.country_code, form.phone_number
+                );
+
+                let response = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Fail)
+                    .add_message("Invalid verification code".into());
+
+                return Either::A(futures::future::ok(
+                    HttpResponse::Forbidden().json(response),
+                ));
+            }
+
+            // Verification was correct
+            info!(
+                "Phone number {} {} verified!",
+                form.country_code, form.phone_number
+            );
+        }
+        Err(e) => {
+            return match e {
+                // If there was an internal error, that the Authy crate has bubbled up.
+                AuthyError::RequestError(e)
+                | AuthyError::IoError(e)
+                | AuthyError::JsonParseError(e) => {
+                    // Something awful happened
+                    warn!(
+                        "Unable to verify code, '{}', submitted for '{}' '{}'! Error: {}",
+                        verification_code, form.country_code, form.phone_number, e
+                    );
+
+                    let response = ApiResponse::<()>::from(None)
+                        .with_status(ResponseStatus::Error)
+                        .add_message("Internal server error".into());
+
+                    Either::A(futures::future::ok(
+                        HttpResponse::InternalServerError().json(response),
+                    ))
+                }
+                // If the verification code was incorrect
+                // The Authy crate currently returns this as an Unauthorized API Key error.
+                AuthyError::UnauthorizedKey(_) => {
+                    warn!(
+                        "Invalid verification code, '{}', submitted for '{}' '{}'!",
+                        verification_code, form.country_code, form.phone_number
+                    );
+
+                    let response = ApiResponse::<()>::from(None)
+                        .with_status(ResponseStatus::Fail)
+                        .add_message("Invalid verification code".into());
+
+                    Either::A(futures::future::ok(
+                        HttpResponse::Forbidden().json(response),
+                    ))
+                }
+                // If we received some other Authy error response.
+                e => {
+                    warn!(
+                        "Unexpected authy error during verification, '{}', submitted for '{}' '{}'! Error: {}",
+                        verification_code, form.country_code, form.phone_number, e
+                    );
+
+                    let response = ApiResponse::<()>::from(None)
+                        .with_status(ResponseStatus::Fail)
+                        .add_message("Unable to verify the code".into());
+
+                    Either::A(futures::future::ok(
+                        HttpResponse::Forbidden().json(response),
+                    ))
+                }
+            };
+        }
+    }
+
+    /*********************************************/
+    /*  Verified, find identity, start session   */
+    /*********************************************/
+
+    let pool_clone = pool.clone();
+
+    Either::B(
+        lookup_idenity(&pool, form.country_code, form.phone_number.clone())
+            .and_then(move |ident| start_session(&pool_clone, ident.person_id))
+            .then(move |res| match res {
+                Ok(session) => {
+                    info!(
+                        "Successfully verified identity for person {}",
+                        session.person_id
+                    );
+
+                    Ok(HttpResponse::Ok().json(ApiResponse::success(session)))
+                }
+                Err(e) => {
+                    error!("Failed to start session! Error: {}", e);
+
+                    let response = ApiResponse::<()>::from(None)
+                        .with_status(ResponseStatus::Error)
+                        .add_message("Internal server error".into());
+
+                    Ok(HttpResponse::InternalServerError().json(response))
+                }
+            }),
+    )
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -315,15 +572,18 @@ fn main() {
             .route("/", web::get().to(index))
             .route("/wakeup", web::get().to(wakeup))
             .service(
-                web::scope("/drink").service(
-                    web::resource("")
-                        .route(web::get().to_async(get_drinks))
-                        .route(web::post().to_async(new_drink)),
-                )
-                .service(
-                    web::resource("/{id}")
-                        .route(web::delete().to_async(delete_drink))
-                ),
+                web::scope("/drink")
+                    .service(
+                        web::resource("")
+                            .route(web::get().to_async(get_drinks))
+                            .route(web::post().to_async(new_drink)),
+                    )
+                    .service(web::resource("/{id}").route(web::delete().to_async(delete_drink))),
+            )
+            .service(
+                web::scope("/auth")
+                    .service(web::resource("").route(web::post().to_async(begin_auth)))
+                    .service(web::resource("/verify").route(web::post().to_async(complete_auth))),
             )
     })
     .bind(&listen_addr)
