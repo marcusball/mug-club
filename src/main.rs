@@ -30,8 +30,9 @@ mod schema;
 
 use self::api::{ApiResponse, ResponseStatus};
 use self::db::{
-    Connection, CreateBeer, CreateBrewery, CreateDrink, DeleteDrink, ExpandedDrink, GetBeerByName,
-    GetBreweryByName, GetDrink, GetDrinks, LookupIdentiy, Pool, StartSession,
+    BeerSearchResult, BrewerySearchResult, Connection, CreateBeer, CreateBrewery, CreateDrink,
+    DeleteDrink, ExpandedDrink, GetBeerByName, GetBreweryByName, GetDrink, GetDrinks,
+    LookupIdentiy, Pool, SearchBeerByName, SearchBreweryByName, StartSession,
 };
 
 use std::convert::From;
@@ -541,6 +542,98 @@ fn complete_auth(
     )
 }
 
+fn test_auth(person: models::Person) -> impl Responder {
+    #[derive(Serialize)]
+    #[serde(rename = "message")]
+    struct TestResponse(String);
+
+    HttpResponse::Ok().json(ApiResponse::success(TestResponse(format!(
+        "Hello person {}",
+        person.id
+    ))))
+}
+
+#[derive(Deserialize)]
+struct SearchForm {
+    query: String,
+}
+
+fn search_beer(
+    search_form: web::Query<SearchForm>,
+    pool: web::Data<Pool>,
+) -> impl Future<Item = HttpResponse, Error = Error> {
+    #[derive(Serialize)]
+    #[serde(rename = "beers")]
+    struct SearchResults(Vec<BeerSearchResult>);
+
+    // If the `query` is empty, then return an error
+    if search_form.query.trim().is_empty() {
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Empty search query".into());
+
+        return Either::A(futures::future::ok(
+            HttpResponse::BadRequest().json(response),
+        ));
+    }
+
+    Either::B(
+        db::execute(
+            &pool,
+            SearchBeerByName {
+                query: search_form.query.clone(),
+            },
+        )
+        .from_err()
+        .and_then(|res| match res {
+            Ok(beers) => Ok(HttpResponse::Ok().json(ApiResponse::success(SearchResults(beers)))),
+            Err(e) => {
+                error!("{}", e);
+                Ok(HttpResponse::InternalServerError().into())
+            }
+        }),
+    )
+}
+
+fn search_brewery(
+    search_form: web::Query<SearchForm>,
+    pool: web::Data<Pool>,
+) -> impl Future<Item = HttpResponse, Error = Error> {
+    #[derive(Serialize)]
+    #[serde(rename = "breweries")]
+    struct SearchResults(Vec<BrewerySearchResult>);
+
+    // If the `query` is empty, then return an error
+    if search_form.query.trim().is_empty() {
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Fail)
+            .add_message("Empty search query".into());
+
+        return Either::A(futures::future::ok(
+            HttpResponse::BadRequest().json(response),
+        ));
+    }
+
+    Either::B(
+        db::execute(
+            &pool,
+            SearchBreweryByName {
+                query: search_form.query.clone(),
+            },
+        )
+        .from_err()
+        .and_then(|res| match res {
+            Ok(breweries) => {
+                Ok(HttpResponse::Ok().json(ApiResponse::success(SearchResults(breweries))))
+            }
+            Err(e) => {
+                error!("{}", e);
+                Ok(HttpResponse::InternalServerError().into())
+            }
+        }),
+    )
+}
+
 fn main() {
     dotenv::dotenv().ok();
     env_logger::init();
@@ -583,7 +676,13 @@ fn main() {
             .service(
                 web::scope("/auth")
                     .service(web::resource("").route(web::post().to_async(begin_auth)))
-                    .service(web::resource("/verify").route(web::post().to_async(complete_auth))),
+                    .service(web::resource("/verify").route(web::post().to_async(complete_auth)))
+                    .service(web::resource("/test").route(web::get().to(test_auth))),
+            )
+            .service(
+                web::scope("/search")
+                    .service(web::resource("/beer").route(web::get().to_async(search_beer)))
+                    .service(web::resource("/brewery").route(web::get().to_async(search_brewery))),
             )
     })
     .bind(&listen_addr)
