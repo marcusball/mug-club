@@ -313,7 +313,7 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
             .with_status(ResponseStatus::Fail)
             .add_message("Invalid phone number".into());
 
-        return futures::future::ok(HttpResponse::BadRequest().json(response));
+        return Either::A(futures::future::ok(HttpResponse::BadRequest().json(response)));
     }
 
     let client = authy::Client::new(
@@ -321,29 +321,31 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
         &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
     );
 
-    let (status, _start) = match phone::start(
-        &client,
-        phone::ContactType::SMS,
-        form.country_code,
-        &form.phone_number,
-        Some(6),
-        None,
-    ) {
-        Ok(res) => res,
-        Err(e) => {
-            error!("Failed to start phone number verification! Error: {}", e);
+    Either::B(web::block(move || {
+            phone::start(
+            &client,
+            phone::ContactType::SMS,
+            form.country_code,
+            &form.phone_number,
+            Some(6),
+            None,
+        )
+    })
+    .from_err()
+    .and_then(|(status, _start)| {
+        let response = ApiResponse::<()>::from(None).add_message(status.message);
 
-            let response = ApiResponse::<()>::from(None)
-                .with_status(ResponseStatus::Error)
-                .add_message("That phone number didn't work :(".into());
+        HttpResponse::Ok().json(response)
+    })
+    .or_else(|e| {
+        error!("Failed to start phone number verification! Error: {}", e);
 
-            return futures::future::ok(HttpResponse::BadRequest().json(response));
-        }
-    };
+        let response = ApiResponse::<()>::from(None)
+            .with_status(ResponseStatus::Error)
+            .add_message("That phone number didn't work :(".into());
 
-    let response = ApiResponse::<()>::from(None).add_message(status.message);
-
-    futures::future::ok(HttpResponse::Ok().json(response))
+        HttpResponse::BadRequest().json(response)
+    }))
 }
 
 fn complete_auth(
