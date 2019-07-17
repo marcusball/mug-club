@@ -313,7 +313,9 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
             .with_status(ResponseStatus::Fail)
             .add_message("Invalid phone number".into());
 
-        return Either::A(futures::future::ok(HttpResponse::BadRequest().json(response)));
+        return Either::A(futures::future::ok(
+            HttpResponse::BadRequest().json(response),
+        ));
     }
 
     let client = authy::Client::new(
@@ -321,31 +323,33 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
         &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
     );
 
-    Either::B(web::block(move || {
+    Either::B(
+        web::block(move || {
             phone::start(
-            &client,
-            phone::ContactType::SMS,
-            form.country_code,
-            &form.phone_number,
-            Some(6),
-            None,
-        )
-    })
-    .from_err()
-    .and_then(|(status, _start)| {
-        let response = ApiResponse::<()>::from(None).add_message(status.message);
+                &client,
+                phone::ContactType::SMS,
+                form.country_code,
+                &form.phone_number,
+                Some(6),
+                None,
+            )
+        })
+        .from_err()
+        .and_then(|(status, _start)| {
+            let response = ApiResponse::<()>::from(None).add_message(status.message);
 
-        HttpResponse::Ok().json(response)
-    })
-    .or_else(|e| {
-        error!("Failed to start phone number verification! Error: {}", e);
+            HttpResponse::Ok().json(response)
+        })
+        .or_else(|e| {
+            error!("Failed to start phone number verification! Error: {}", e);
 
-        let response = ApiResponse::<()>::from(None)
-            .with_status(ResponseStatus::Error)
-            .add_message("That phone number didn't work :(".into());
+            let response = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Error)
+                .add_message("That phone number didn't work :(".into());
 
-        HttpResponse::BadRequest().json(response)
-    }))
+            HttpResponse::BadRequest().json(response)
+        }),
+    )
 }
 
 fn complete_auth(
@@ -431,7 +435,7 @@ fn complete_auth(
     let verification_code_clone = verification_code.clone();
 
     // We're going to move `form` into a closure, so copy these fields
-    // as they're needed in a different spot. 
+    // as they're needed in a different spot.
     let full_number = (form.country_code, form.phone_number.clone());
     let full_number_clone = full_number.clone();
 
@@ -558,7 +562,6 @@ fn complete_auth(
                     Ok(HttpResponse::InternalServerError().json(response))
                 }
             })).from_err())
-            
 }
 
 fn test_auth(person: models::Person) -> impl Responder {

@@ -23,7 +23,7 @@ impl std::error::Error for Error {
             Self::SessionNotFound => "Session not found!",
             Self::BlockingError => "Blocking Error!",
             Self::DieselError(e) => e.description(),
-            Self::PoolError(e) => e.description()
+            Self::PoolError(e) => e.description(),
         }
     }
 
