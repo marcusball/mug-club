@@ -313,7 +313,9 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
             .with_status(ResponseStatus::Fail)
             .add_message("Invalid phone number".into());
 
-        return futures::future::ok(HttpResponse::BadRequest().json(response));
+        return Either::A(futures::future::ok(
+            HttpResponse::BadRequest().json(response),
+        ));
     }
 
     let client = authy::Client::new(
@@ -321,29 +323,33 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
         &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
     );
 
-    let (status, _start) = match phone::start(
-        &client,
-        phone::ContactType::SMS,
-        form.country_code,
-        &form.phone_number,
-        Some(6),
-        None,
-    ) {
-        Ok(res) => res,
-        Err(e) => {
+    Either::B(
+        web::block(move || {
+            phone::start(
+                &client,
+                phone::ContactType::SMS,
+                form.country_code,
+                &form.phone_number,
+                Some(6),
+                None,
+            )
+        })
+        .from_err()
+        .and_then(|(status, _start)| {
+            let response = ApiResponse::<()>::from(None).add_message(status.message);
+
+            HttpResponse::Ok().json(response)
+        })
+        .or_else(|e| {
             error!("Failed to start phone number verification! Error: {}", e);
 
             let response = ApiResponse::<()>::from(None)
                 .with_status(ResponseStatus::Error)
                 .add_message("That phone number didn't work :(".into());
 
-            return futures::future::ok(HttpResponse::BadRequest().json(response));
-        }
-    };
-
-    let response = ApiResponse::<()>::from(None).add_message(status.message);
-
-    futures::future::ok(HttpResponse::Ok().json(response))
+            HttpResponse::BadRequest().json(response)
+        }),
+    )
 }
 
 fn complete_auth(
@@ -351,6 +357,8 @@ fn complete_auth(
     pool: web::Data<Pool>,
 ) -> impl Future<Item = HttpResponse, Error = Error> {
     use authy::api::phone;
+
+    let pool_clone = pool.clone();
 
     /*********************************************/
     /*  Closures for database operations         */
@@ -424,102 +432,116 @@ fn complete_auth(
     );
 
     let verification_code = form.code.clone().unwrap_or("wtf".into());
+    let verification_code_clone = verification_code.clone();
 
-    // Attempt to verify the verification code
-    let verification_status = phone::check(
+    // We're going to move `form` into a closure, so copy these fields
+    // as they're needed in a different spot.
+    let full_number = (form.country_code, form.phone_number.clone());
+    let full_number_clone = full_number.clone();
+
+    Either::B(web::block(move || phone::check(
         &client,
         form.country_code,
         &form.phone_number,
         &verification_code,
-    );
-
-    match verification_status {
-        Ok(status) => {
-            // If the verification code was invalid, return an error
-            if !status.success {
-                warn!(
-                    "Invalid verification code, '{}', submitted for '{}' '{}'!",
-                    verification_code, form.country_code, form.phone_number
-                );
-
-                let response = ApiResponse::<()>::from(None)
-                    .with_status(ResponseStatus::Fail)
-                    .add_message("Invalid verification code".into());
-
-                return Either::A(futures::future::ok(
-                    HttpResponse::Forbidden().json(response),
-                ));
-            }
-
-            // Verification was correct
-            info!(
-                "Phone number {} {} verified!",
-                form.country_code, form.phone_number
-            );
-        }
-        Err(e) => {
-            return match e {
-                // If there was an internal error, that the Authy crate has bubbled up.
-                AuthyError::RequestError(e)
-                | AuthyError::IoError(e)
-                | AuthyError::JsonParseError(e) => {
-                    // Something awful happened
-                    warn!(
-                        "Unable to verify code, '{}', submitted for '{}' '{}'! Error: {}",
-                        verification_code, form.country_code, form.phone_number, e
-                    );
-
-                    let response = ApiResponse::<()>::from(None)
-                        .with_status(ResponseStatus::Error)
-                        .add_message("Internal server error".into());
-
-                    Either::A(futures::future::ok(
-                        HttpResponse::InternalServerError().json(response),
-                    ))
-                }
-                // If the verification code was incorrect
-                // The Authy crate currently returns this as an Unauthorized API Key error.
-                AuthyError::UnauthorizedKey(_) => {
+    ))
+    .then(move |verification_status| {
+        match verification_status {
+            Ok(status) => {
+                // If the verification code was invalid, return an error
+                if !status.success {
                     warn!(
                         "Invalid verification code, '{}', submitted for '{}' '{}'!",
-                        verification_code, form.country_code, form.phone_number
+                        verification_code_clone, full_number_clone.0, full_number_clone.1
                     );
 
                     let response = ApiResponse::<()>::from(None)
                         .with_status(ResponseStatus::Fail)
                         .add_message("Invalid verification code".into());
 
-                    Either::A(futures::future::ok(
+                    return Err(
                         HttpResponse::Forbidden().json(response),
-                    ))
-                }
-                // If we received some other Authy error response.
-                e => {
-                    warn!(
-                        "Unexpected authy error during verification, '{}', submitted for '{}' '{}'! Error: {}",
-                        verification_code, form.country_code, form.phone_number, e
                     );
-
-                    let response = ApiResponse::<()>::from(None)
-                        .with_status(ResponseStatus::Fail)
-                        .add_message("Unable to verify the code".into());
-
-                    Either::A(futures::future::ok(
-                        HttpResponse::Forbidden().json(response),
-                    ))
                 }
-            };
-        }
-    }
 
+                // Verification was correct
+                info!(
+                    "Phone number {} {} verified!",
+                    full_number_clone.0, full_number_clone.1
+                );
+
+                Ok(status)
+            }
+            Err(actix_web::error::BlockingError::Error(e)) => {
+                match e {
+                    // If there was an internal error, that the Authy crate has bubbled up.
+                    AuthyError::RequestError(e)
+                    | AuthyError::IoError(e)
+                    | AuthyError::JsonParseError(e) => {
+                        // Something awful happened
+                        warn!(
+                            "Unable to verify code, '{}', submitted for '{}' '{}'! Error: {}",
+                            verification_code_clone, full_number_clone.0, full_number_clone.1, e
+                        );
+
+                        let response = ApiResponse::<()>::from(None)
+                            .with_status(ResponseStatus::Error)
+                            .add_message("Internal server error".into());
+
+                        Err(
+                            HttpResponse::InternalServerError().json(response),
+                        )
+                    }
+                    // If the verification code was incorrect
+                    // The Authy crate currently returns this as an Unauthorized API Key error.
+                    AuthyError::UnauthorizedKey(_) => {
+                        warn!(
+                            "Invalid verification code, '{}', submitted for '{}' '{}'!",
+                            verification_code_clone, full_number_clone.0, full_number_clone.1
+                        );
+
+                        let response = ApiResponse::<()>::from(None)
+                            .with_status(ResponseStatus::Fail)
+                            .add_message("Invalid verification code".into());
+
+                        Err(
+                            HttpResponse::Forbidden().json(response),
+                        )
+                    }
+                    // If we received some other Authy error response.
+                    e => {
+                        warn!(
+                            "Unexpected authy error during verification, '{}', submitted for '{}' '{}'! Error: {}",
+                            verification_code_clone, full_number_clone.0, full_number_clone.1, e
+                        );
+
+                        let response = ApiResponse::<()>::from(None)
+                            .with_status(ResponseStatus::Fail)
+                            .add_message("Unable to verify the code".into());
+
+                        Err(
+                            HttpResponse::Forbidden().json(response),
+                        )
+                    }
+                }
+            },
+            Err(actix_web::error::BlockingError::Canceled) => {
+                // Something awful happened
+                error!("Blocking for phone::check request was cancelled!");
+
+                let response = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Error)
+                    .add_message("Internal server error".into());
+
+                Err(HttpResponse::InternalServerError().json(response))
+            }
+        }
+    })
     /*********************************************/
     /*  Verified, find identity, start session   */
     /*********************************************/
 
-    let pool_clone = pool.clone();
-
-    Either::B(
-        lookup_idenity(&pool, form.country_code, form.phone_number.clone())
+    .and_then(move |_| lookup_idenity(&pool, full_number.0, full_number.1)
             .and_then(move |ident| start_session(&pool_clone, ident.person_id))
             .then(move |res| match res {
                 Ok(session) => {
@@ -539,8 +561,7 @@ fn complete_auth(
 
                     Ok(HttpResponse::InternalServerError().json(response))
                 }
-            }),
-    )
+            })).from_err())
 }
 
 fn test_auth(person: models::Person) -> impl Responder {
