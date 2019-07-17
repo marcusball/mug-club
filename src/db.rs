@@ -5,6 +5,7 @@ use chrono::{Duration, Utc};
 use diesel;
 use diesel::prelude::*;
 use diesel::r2d2;
+use diesel::sql_types::Text;
 use futures::future::Future;
 use regex::Regex;
 use textnonce::TextNonce;
@@ -20,7 +21,7 @@ pub type Connection = r2d2::PooledConnection<r2d2::ConnectionManager<PgConnectio
 
 // Diesel does not have a `lower` function built in; create one ourselves.
 // See: https://github.com/diesel-rs/diesel/issues/560#issuecomment-270199166
-sql_function!(lower, lower_t, (a: diesel::types::VarChar) -> diesel::types::VarChar);
+sql_function!(fn lower(x: Text) -> Text);
 
 pub trait Query {
     type Result: Send;
