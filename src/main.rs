@@ -537,31 +537,32 @@ fn complete_auth(
             }
         }
     })
+    
     /*********************************************/
     /*  Verified, find identity, start session   */
     /*********************************************/
-
     .and_then(move |_| lookup_idenity(&pool, full_number.0, full_number.1)
-            .and_then(move |ident| start_session(&pool_clone, ident.person_id))
-            .then(move |res| match res {
-                Ok(session) => {
-                    info!(
-                        "Successfully verified identity for person {}",
-                        session.person_id
-                    );
+        .and_then(move |ident| start_session(&pool_clone, ident.person_id))
+        .then(move |res| match res {
+            Ok(session) => {
+                info!(
+                    "Successfully verified identity for person {}",
+                    session.person_id
+                );
 
-                    Ok(HttpResponse::Ok().json(ApiResponse::success(session)))
-                }
-                Err(e) => {
-                    error!("Failed to start session! Error: {}", e);
+                Ok(HttpResponse::Ok().json(ApiResponse::success(session)))
+            }
+            Err(e) => {
+                error!("Failed to start session! Error: {}", e);
 
-                    let response = ApiResponse::<()>::from(None)
-                        .with_status(ResponseStatus::Error)
-                        .add_message("Internal server error".into());
+                let response = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Error)
+                    .add_message("Internal server error".into());
 
-                    Ok(HttpResponse::InternalServerError().json(response))
-                }
-            })).from_err())
+                Ok(HttpResponse::InternalServerError().json(response))
+            }
+        }))
+    .from_err())
 }
 
 fn test_auth(person: models::Person) -> impl Responder {

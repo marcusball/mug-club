@@ -37,10 +37,7 @@ pub fn execute<T: Query + Send + 'static>(
     web::block::<_, _, Error>(move || Ok(query.execute(pool.get()?))).from_err()
 }
 
-pub fn execute_sync<T: Query + Send + 'static>(
-    pool: &Pool,
-    query: T,
-) -> Result<T::Result> {
+pub fn execute_sync<T: Query + Send + 'static>(pool: &Pool, query: T) -> Result<T::Result> {
     Ok(query.execute(pool.get()?))
 }
 
@@ -172,10 +169,10 @@ impl Query for DeleteDrink {
     fn execute(&self, conn: Connection) -> Self::Result {
         use super::schema::drink::dsl::*;
 
-        Ok(diesel::delete(
-            drink.filter(id.eq(self.drink_id).and(person_id.eq(self.person_id))),
+        Ok(
+            diesel::delete(drink.filter(id.eq(self.drink_id).and(person_id.eq(self.person_id))))
+                .execute(&conn)?,
         )
-        .execute(&conn)?)
     }
 }
 
@@ -237,9 +234,7 @@ impl Query for CreateBrewery {
     fn execute(&self, conn: Connection) -> Self::Result {
         use super::schema::brewery::dsl::*;
 
-        let new_brewery = models::NewBrewery {
-            name: &self.name,
-        };
+        let new_brewery = models::NewBrewery { name: &self.name };
 
         Ok(diesel::insert_into(brewery)
             .values(new_brewery)

@@ -63,11 +63,4 @@ joinable!(drink -> person (person_id));
 joinable!(identity -> person (person_id));
 joinable!(login_session -> person (person_id));
 
-allow_tables_to_appear_in_same_query!(
-    beer,
-    brewery,
-    drink,
-    identity,
-    login_session,
-    person,
-);
+allow_tables_to_appear_in_same_query!(beer, brewery, drink, identity, login_session, person,);

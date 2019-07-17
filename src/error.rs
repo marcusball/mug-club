@@ -1,7 +1,7 @@
+use actix_web::error::{BlockingError, ResponseError};
 use actix_web::Error as ActixError;
-use actix_web::error::{ResponseError, BlockingError};
-use diesel::result::Error as DieselError;
 use diesel::r2d2;
+use diesel::result::Error as DieselError;
 use std::convert::From;
 
 pub type Result<T> = ::std::result::Result<T, Error>;
@@ -14,7 +14,7 @@ pub enum Error {
 
     DieselError(DieselError),
 
-    PoolError(r2d2::PoolError)
+    PoolError(r2d2::PoolError),
 }
 
 impl std::error::Error for Error {
@@ -32,15 +32,17 @@ impl std::error::Error for Error {
             Self::DieselError(e) => Some(e),
             Self::PoolError(e) => Some(e),
             Self::SessionNotFound => None,
-            Self::BlockingError => None
+            Self::BlockingError => None,
         }
     }
 }
 
-
 impl ResponseError for Error {}
 
-impl<E> From<BlockingError<E>> for Error where E: std::fmt::Debug {
+impl<E> From<BlockingError<E>> for Error
+where
+    E: std::fmt::Debug,
+{
     fn from(e: BlockingError<E>) -> Error {
         Error::BlockingError
     }
