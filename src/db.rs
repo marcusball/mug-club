@@ -37,6 +37,13 @@ pub fn execute<T: Query + Send + 'static>(
     web::block::<_, _, Error>(move || Ok(query.execute(pool.get()?))).from_err()
 }
 
+pub fn execute_sync<T: Query + Send + 'static>(
+    pool: &Pool,
+    query: T,
+) -> Result<T::Result> {
+    Ok(query.execute(pool.get()?))
+}
+
 #[derive(Serialize, Queryable)]
 #[serde(rename = "drink")]
 pub struct ExpandedDrink {
