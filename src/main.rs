@@ -1,4 +1,6 @@
 #![allow(proc_macro_derive_resolution_fallback)] // See: https://github.com/diesel-rs/diesel/issues/1785
+#![feature(async_closure)]
+#![feature(type_alias_impl_trait)]
 
 extern crate actix_cors;
 extern crate actix_rt;
@@ -35,6 +37,7 @@ use self::db::{
     DeleteDrink, ExpandedDrink, GetBeerByName, GetBreweryByName, GetDrink, GetDrinks,
     LookupIdentiy, Pool, SearchBeerByName, SearchBreweryByName, StartSession,
 };
+use self::error::Error;
 
 use std::convert::From;
 use std::str::FromStr;
@@ -49,9 +52,12 @@ use diesel::prelude::*;
 use diesel::r2d2::ConnectionManager;
 use futures::future::Either;
 use futures::Future;
+use futures::prelude::*;
 use regex::Regex;
 
-fn index() -> impl Responder {
+type ActixResult<T> = std::result::Result<T, actix_web::error::Error>;
+
+async fn index() -> impl Responder {
     #[derive(Serialize)]
     #[serde(rename = "message")]
     struct TestResponse(String);
@@ -60,7 +66,7 @@ fn index() -> impl Responder {
 }
 
 // Dummy method. Just wanted a route for the front-end to ping to make up the heroku instance.
-fn wakeup() -> impl Responder {
+async fn wakeup() -> impl Responder {
     #[derive(Serialize)]
     #[serde(rename = "message")]
     struct TestResponse(String);
@@ -68,10 +74,10 @@ fn wakeup() -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::success(TestResponse("👍".into())))
 }
 
-fn get_drinks(
+async fn get_drinks(
     pool: web::Data<Pool>,
     person: models::Person,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+) -> ActixResult<HttpResponse> {
     #[derive(Serialize)]
     #[serde(rename = "drinks")]
     struct Drinks(Vec<ExpandedDrink>);
@@ -82,11 +88,9 @@ fn get_drinks(
             person_id: person.id,
         },
     )
-    .from_err()
-    .and_then(|res| match res {
-        Ok(drinks) => Ok(HttpResponse::Ok().json(ApiResponse::success(Drinks(drinks)))),
-        Err(_) => Ok(HttpResponse::InternalServerError().into()),
-    })
+    .and_then(|drinks| async move { Ok(HttpResponse::Ok().json(ApiResponse::success(Drinks(drinks)))) })
+    .or_else(|_| async move { Ok(HttpResponse::InternalServerError().into()) })
+    .await
 }
 
 #[derive(Deserialize)]
@@ -120,11 +124,11 @@ struct DrinkForm {
 /// - `comment`: An optional comment about the beer
 ///
 /// If no records correspond to the `beer` or `brewery` names, new records will be created.
-fn new_drink(
+async fn new_drink(
     pool: web::Data<Pool>,
     person: models::Person,
     details: web::Form<DrinkForm>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+) -> ActixResult<HttpResponse> {
     // Save these for later
     let beer_name = details.beer.clone();
 
@@ -135,17 +139,11 @@ fn new_drink(
     // This closure will create a new brewery record with the given `name`.
     let create_brewery = |pool: &Pool, name: String| {
         db::execute(pool, CreateBrewery { name: name })
-            .from_err()
-            .and_then(|res| res)
-            .map_err(|e| actix_web::Error::from(e))
     };
 
     // This closure will create a new beer record, given a `name` and its `brewery_id`.
     let create_beer = |pool: &Pool, name: String, brewery_id: i32| {
         db::execute(pool, CreateBeer { name, brewery_id })
-            .from_err()
-            .and_then(|res| res)
-            .map_err(|e| actix_web::Error::from(e))
     };
 
     // This closure will lookup a brewery given its `name` and,
@@ -153,14 +151,10 @@ fn new_drink(
     let get_brewery = |pool: &Pool, name: String| {
         let pool_clone = pool.clone();
         db::execute(pool, GetBreweryByName { name: name.clone() })
-            .from_err::<Error>()
-            .map(move |res| match res {
-                Ok(Some(brewery)) => Either::A(futures::future::result(Ok(brewery))),
-                Ok(None) => Either::B(create_brewery(&pool_clone, name)),
-                Err(e) => Either::A(futures::future::result(Err(actix_web::Error::from(e)))),
+            .and_then(move |res| match res {
+                Some(brewery) => Either::Left(futures::future::ready(Ok(brewery))),
+                None => Either::Right(create_brewery(&pool_clone, name)),
             })
-            .from_err::<actix_web::Error>()
-            .flatten()
     };
 
     // This closure will lookup a beer given its `name` and `brewery_id` and,
@@ -174,28 +168,20 @@ fn new_drink(
                 brewery_id: brewery_id,
             },
         )
-        .from_err()
         .and_then(move |res| match res {
-            Ok(Some(beer)) => Either::A(futures::future::result(Ok(beer))),
-            Ok(None) => Either::B(create_beer(&pool_clone, name, brewery_id)),
-            Err(e) => Either::A(futures::future::result(Err(actix_web::Error::from(e)))),
+            Some(beer) => Either::Left(futures::future::ready(Ok(beer))),
+            None => Either::Right(create_beer(&pool_clone, name, brewery_id)),
         })
     };
 
     // This will insert a new Drink record
     let record_drink = |pool: &Pool, drink: CreateDrink| {
         db::execute(pool, drink)
-            .from_err()
-            .and_then(|res| res)
-            .map_err(|e| actix_web::Error::from(e))
     };
 
     // Get an ExpandedDrink record by ID
     let get_drink = |pool: &Pool, drink_id: i32| {
         db::execute(pool, GetDrink { drink_id })
-            .from_err()
-            .and_then(|res| res)
-            .map_err(|e| actix_web::Error::from(e))
     };
 
     /*********************************************/
@@ -223,10 +209,11 @@ fn new_drink(
         })
         .and_then(move |drink| get_drink(&pool_clone_2, drink.id))
         // Format the result for output
-        .then(|res| match res {
+        .then(|res| async move { match res {
             Ok(drink) => Ok(HttpResponse::Ok().json(ApiResponse::success(drink))),
             Err(_) => Ok(HttpResponse::InternalServerError().into()),
-        })
+        }})
+        .await
 }
 
 #[derive(Deserialize)]
@@ -234,11 +221,11 @@ struct DrinkIdForm {
     id: i32,
 }
 
-fn delete_drink(
+async fn delete_drink(
     person: models::Person,
     info: web::Path<DrinkIdForm>,
     pool: web::Data<Pool>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+) -> ActixResult<HttpResponse> {
     db::execute(
         &pool,
         DeleteDrink {
@@ -246,8 +233,7 @@ fn delete_drink(
             person_id: person.id,
         },
     )
-    .from_err()
-    .and_then(move |res| match res {
+    .then(move |res| async move { match res {
         Ok(0) => {
             let not_found = ApiResponse::<()>::from(None)
                 .with_status(ResponseStatus::Fail)
@@ -283,7 +269,8 @@ fn delete_drink(
 
             Ok(HttpResponse::InternalServerError().json(unexpected_error))
         }
-    })
+    }})
+    .await
 }
 
 #[derive(Deserialize)]
@@ -293,7 +280,7 @@ struct AuthForm {
     code: Option<String>,
 }
 
-fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Error = Error> {
+async fn begin_auth(form: web::Form<AuthForm>) -> ActixResult<HttpResponse> {
     use authy::api::phone;
 
     lazy_static! {
@@ -313,9 +300,7 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
             .with_status(ResponseStatus::Fail)
             .add_message("Invalid phone number".into());
 
-        return Either::A(futures::future::ok(
-            HttpResponse::BadRequest().json(response),
-        ));
+        return Ok(HttpResponse::BadRequest().json(response));
     }
 
     let client = authy::Client::new(
@@ -323,7 +308,6 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
         &std::env::var("AUTHY_API_KEY").expect("An authy API key is required!"),
     );
 
-    Either::B(
         web::block(move || {
             phone::start(
                 &client,
@@ -334,28 +318,34 @@ fn begin_auth(form: web::Form<AuthForm>) -> impl Future<Item = HttpResponse, Err
                 None,
             )
         })
-        .from_err()
-        .and_then(|(status, _start)| {
+        .map(|f| {
+            match f {
+                Ok(Ok(f)) => Ok(f),
+                Ok(Err(e)) => Err(Error::from(e)),
+                Err(e) => Err(Error::from(e)),
+            }
+        })
+        .and_then(|(status, _start)| async move {
             let response = ApiResponse::<()>::from(None).add_message(status.message);
 
-            HttpResponse::Ok().json(response)
+            Ok(HttpResponse::Ok().json(response))
         })
-        .or_else(|e| {
+        .or_else(|e| async move {
             error!("Failed to start phone number verification! Error: {}", e);
 
             let response = ApiResponse::<()>::from(None)
                 .with_status(ResponseStatus::Error)
                 .add_message("That phone number didn't work :(".into());
 
-            HttpResponse::BadRequest().json(response)
-        }),
-    )
+            Ok(HttpResponse::BadRequest().json(response))
+        })
+        .await
 }
 
-fn complete_auth(
+async fn complete_auth(
     form: web::Form<AuthForm>,
     pool: web::Data<Pool>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+) -> ActixResult<HttpResponse> {
     use authy::api::phone;
 
     let pool_clone = pool.clone();
@@ -371,16 +361,10 @@ fn complete_auth(
                 identifier: format!("{}{}", country_code, phone_number),
             },
         )
-        .from_err()
-        .and_then(|res| res)
-        .map_err(|e| actix_web::Error::from(e))
     };
 
     let start_session = |pool: &Pool, person_id: i32| {
         db::execute(pool, StartSession { person_id })
-            .from_err()
-            .and_then(|res| res)
-            .map_err(|e| actix_web::Error::from(e))
     };
 
     /*********************************************/
@@ -401,9 +385,7 @@ fn complete_auth(
             .with_status(ResponseStatus::Fail)
             .add_message("Missing verification code!".into());
 
-        return Either::A(futures::future::ok(
-            HttpResponse::BadRequest().json(response),
-        ));
+        return Ok(HttpResponse::BadRequest().json(response));
     }
 
     // Check to make sure that the identity submitted appears to be a phone number
@@ -417,9 +399,7 @@ fn complete_auth(
             .with_status(ResponseStatus::Fail)
             .add_message("Invalid phone number!".into());
 
-        return Either::A(futures::future::ok(
-            HttpResponse::BadRequest().json(response),
-        ));
+        return Ok(HttpResponse::BadRequest().json(response));
     }
 
     /*********************************************/
@@ -432,47 +412,56 @@ fn complete_auth(
     );
 
     let verification_code = form.code.clone().unwrap_or("wtf".into());
-    let verification_code_clone = verification_code.clone();
+    let verification_code_clone_1 = verification_code.clone();
+    let verification_code_clone_2 = verification_code.clone();
 
     // We're going to move `form` into a closure, so copy these fields
     // as they're needed in a different spot.
     let full_number = (form.country_code, form.phone_number.clone());
-    let full_number_clone = full_number.clone();
+    let full_number_clone_1 = full_number.clone();
+    let full_number_clone_2 = full_number.clone();
 
-    Either::B(web::block(move || phone::check(
+    web::block(move || phone::check(
         &client,
         form.country_code,
         &form.phone_number,
         &verification_code,
     ))
-    .then(move |verification_status| {
-        match verification_status {
-            Ok(status) => {
-                // If the verification code was invalid, return an error
-                if !status.success {
-                    warn!(
-                        "Invalid verification code, '{}', submitted for '{}' '{}'!",
-                        verification_code_clone, full_number_clone.0, full_number_clone.1
-                    );
+    .map(|f| {
+        match f {
+            Ok(Ok(f)) => Ok(f),
+            Ok(Err(e)) => Err(Error::from(e)),
+            Err(e) => Err(Error::from(e)),
+        }
+    })
+    .and_then(|verify_status| async move {
+        // If the verification code was invalid, return an error
+        if !verify_status.success {
+            warn!(
+                "Invalid verification code, '{}', submitted for '{}' '{}'!",
+                verification_code_clone_1, full_number_clone_1.0, full_number_clone_1.1
+            );
 
-                    let response = ApiResponse::<()>::from(None)
-                        .with_status(ResponseStatus::Fail)
-                        .add_message("Invalid verification code".into());
+            let response = ApiResponse::<()>::from(None)
+                .with_status(ResponseStatus::Fail)
+                .add_message("Invalid verification code".into());
 
-                    return Err(
-                        HttpResponse::Forbidden().json(response),
-                    );
-                }
+            return Ok(Err(
+                HttpResponse::Forbidden().json(response),
+            ));
+        }
 
-                // Verification was correct
-                info!(
-                    "Phone number {} {} verified!",
-                    full_number_clone.0, full_number_clone.1
-                );
+        // Verification was correct
+        info!(
+            "Phone number {} {} verified!",
+            full_number_clone_1.0, full_number_clone_1.1
+        );
 
-                Ok(status)
-            }
-            Err(actix_web::error::BlockingError::Error(e)) => {
+        Ok(Ok(verify_status))
+    })
+    .or_else(move |error| async move {
+        match error {
+            Error::AuthyError(e) => {
                 match e {
                     // If there was an internal error, that the Authy crate has bubbled up.
                     AuthyError::RequestError(e)
@@ -481,51 +470,51 @@ fn complete_auth(
                         // Something awful happened
                         warn!(
                             "Unable to verify code, '{}', submitted for '{}' '{}'! Error: {}",
-                            verification_code_clone, full_number_clone.0, full_number_clone.1, e
+                            verification_code_clone_2, full_number_clone_2.0, full_number_clone_2.1, e
                         );
 
                         let response = ApiResponse::<()>::from(None)
                             .with_status(ResponseStatus::Error)
                             .add_message("Internal server error".into());
 
-                        Err(
+                        Ok(Err(
                             HttpResponse::InternalServerError().json(response),
-                        )
+                        ))
                     }
                     // If the verification code was incorrect
                     // The Authy crate currently returns this as an Unauthorized API Key error.
                     AuthyError::UnauthorizedKey(_) => {
                         warn!(
                             "Invalid verification code, '{}', submitted for '{}' '{}'!",
-                            verification_code_clone, full_number_clone.0, full_number_clone.1
+                            verification_code_clone_2, full_number_clone_2.0, full_number_clone_2.1
                         );
 
                         let response = ApiResponse::<()>::from(None)
                             .with_status(ResponseStatus::Fail)
                             .add_message("Invalid verification code".into());
 
-                        Err(
+                        Ok(Err(
                             HttpResponse::Forbidden().json(response),
-                        )
+                        ))
                     }
                     // If we received some other Authy error response.
                     e => {
                         warn!(
                             "Unexpected authy error during verification, '{}', submitted for '{}' '{}'! Error: {}",
-                            verification_code_clone, full_number_clone.0, full_number_clone.1, e
+                            verification_code_clone_2, full_number_clone_2.0, full_number_clone_2.1, e
                         );
 
                         let response = ApiResponse::<()>::from(None)
                             .with_status(ResponseStatus::Fail)
                             .add_message("Unable to verify the code".into());
 
-                        Err(
+                        Ok(Err(
                             HttpResponse::Forbidden().json(response),
-                        )
+                        ))
                     }
                 }
             },
-            Err(actix_web::error::BlockingError::Canceled) => {
+            Error::FutureCanceled(_) => {
                 // Something awful happened
                 error!("Blocking for phone::check request was cancelled!");
 
@@ -533,7 +522,16 @@ fn complete_auth(
                     .with_status(ResponseStatus::Error)
                     .add_message("Internal server error".into());
 
-                Err(HttpResponse::InternalServerError().json(response))
+                Ok(Err(HttpResponse::InternalServerError().json(response)))
+            },
+            other_error => {
+                error!("Unexpected error! {}", other_error);
+
+                let response = ApiResponse::<()>::from(None)
+                    .with_status(ResponseStatus::Error)
+                    .add_message("Internal server error".into());
+
+                Ok(Err(HttpResponse::InternalServerError().json(response)))
             }
         }
     })
@@ -541,39 +539,45 @@ fn complete_auth(
     /*********************************************/
     /*  Verified, find identity, start session   */
     /*********************************************/
-    .and_then(move |_| lookup_idenity(&pool, full_number.0, full_number.1)
-        .and_then(move |ident| start_session(&pool_clone, ident.person_id))
-        .then(move |res| match res {
-            Ok(session) => {
-                info!(
-                    "Successfully verified identity for person {}",
-                    session.person_id
-                );
-
-                Ok(HttpResponse::Ok().json(ApiResponse::success(session)))
+    .then(move |res| {
+        match res {
+            Ok(Ok(_)) => Either::Left(lookup_idenity(&pool, full_number.0, full_number.1)
+                .and_then(move |ident| start_session(&pool_clone, ident.person_id))
+                .then(move |res| async move { match res {
+                    Ok(session) => {
+                        info!(
+                            "Successfully verified identity for person {}",
+                            session.person_id
+                        );
+        
+                        Ok(HttpResponse::Ok().json(ApiResponse::success(session)))
+                    }
+                    Err(e) => {
+                        error!("Failed to start session! Error: {}", e);
+        
+                        let response = ApiResponse::<()>::from(None)
+                            .with_status(ResponseStatus::Error)
+                            .add_message("Internal server error".into());
+        
+                        Ok(HttpResponse::InternalServerError().json(response))
+                    }
+                }})),
+            Ok(Err(res)) => Either::Right(futures::future::ready(Ok(res))),
+            Err(e) => Either::Right(futures::future::ready(Err(e))),
             }
-            Err(e) => {
-                error!("Failed to start session! Error: {}", e);
-
-                let response = ApiResponse::<()>::from(None)
-                    .with_status(ResponseStatus::Error)
-                    .add_message("Internal server error".into());
-
-                Ok(HttpResponse::InternalServerError().json(response))
-            }
-        }))
-    .from_err())
+        })
+    .await
 }
 
-fn test_auth(person: models::Person) -> impl Responder {
+async fn test_auth(person: models::Person) -> ActixResult<HttpResponse> {
     #[derive(Serialize)]
     #[serde(rename = "message")]
     struct TestResponse(String);
 
-    HttpResponse::Ok().json(ApiResponse::success(TestResponse(format!(
+    Ok(HttpResponse::Ok().json(ApiResponse::success(TestResponse(format!(
         "Hello person {}",
         person.id
-    ))))
+    )))))
 }
 
 #[derive(Deserialize)]
@@ -581,10 +585,10 @@ struct SearchForm {
     query: String,
 }
 
-fn search_beer(
+async fn search_beer(
     search_form: web::Query<SearchForm>,
     pool: web::Data<Pool>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+) -> ActixResult<HttpResponse> {
     #[derive(Serialize)]
     #[serde(rename = "beers")]
     struct SearchResults(Vec<BeerSearchResult>);
@@ -595,33 +599,27 @@ fn search_beer(
             .with_status(ResponseStatus::Fail)
             .add_message("Empty search query".into());
 
-        return Either::A(futures::future::ok(
-            HttpResponse::BadRequest().json(response),
-        ));
+        return Ok(HttpResponse::BadRequest().json(response));
     }
 
-    Either::B(
         db::execute(
             &pool,
             SearchBeerByName {
                 query: search_form.query.clone(),
             },
         )
-        .from_err()
-        .and_then(|res| match res {
-            Ok(beers) => Ok(HttpResponse::Ok().json(ApiResponse::success(SearchResults(beers)))),
-            Err(e) => {
-                error!("{}", e);
+        .and_then(|beers| async move { Ok(HttpResponse::Ok().json(ApiResponse::success(SearchResults(beers))))})
+        .or_else(|e| async move {
+            error!("{}", e);
                 Ok(HttpResponse::InternalServerError().into())
-            }
-        }),
-    )
+    })
+        .await
 }
 
-fn search_brewery(
+async fn search_brewery(
     search_form: web::Query<SearchForm>,
     pool: web::Data<Pool>,
-) -> impl Future<Item = HttpResponse, Error = Error> {
+) -> ActixResult<HttpResponse> {
     #[derive(Serialize)]
     #[serde(rename = "breweries")]
     struct SearchResults(Vec<BrewerySearchResult>);
@@ -632,29 +630,24 @@ fn search_brewery(
             .with_status(ResponseStatus::Fail)
             .add_message("Empty search query".into());
 
-        return Either::A(futures::future::ok(
-            HttpResponse::BadRequest().json(response),
-        ));
+        return Ok(HttpResponse::BadRequest().json(response));
     }
 
-    Either::B(
         db::execute(
             &pool,
             SearchBreweryByName {
                 query: search_form.query.clone(),
             },
         )
-        .from_err()
-        .and_then(|res| match res {
-            Ok(breweries) => {
+        .and_then(|breweries| async move {
                 Ok(HttpResponse::Ok().json(ApiResponse::success(SearchResults(breweries))))
-            }
-            Err(e) => {
+            })
+        .or_else(|e| async move {
                 error!("{}", e);
                 Ok(HttpResponse::InternalServerError().into())
-            }
-        }),
-    )
+
+        })
+        .await
 }
 
 fn main() {
@@ -693,21 +686,21 @@ fn main() {
                 web::scope("/drink")
                     .service(
                         web::resource("")
-                            .route(web::get().to_async(get_drinks))
-                            .route(web::post().to_async(new_drink)),
+                            .route(web::get().to(get_drinks))
+                            .route(web::post().to(new_drink)),
                     )
-                    .service(web::resource("/{id}").route(web::delete().to_async(delete_drink))),
+                    .service(web::resource("/{id}").route(web::delete().to(delete_drink))),
             )
             .service(
                 web::scope("/auth")
-                    .service(web::resource("").route(web::post().to_async(begin_auth)))
-                    .service(web::resource("/verify").route(web::post().to_async(complete_auth)))
+                    .service(web::resource("").route(web::post().to(begin_auth)))
+                    .service(web::resource("/verify").route(web::post().to(complete_auth)))
                     .service(web::resource("/test").route(web::get().to(test_auth))),
             )
             .service(
                 web::scope("/search")
-                    .service(web::resource("/beer").route(web::get().to_async(search_beer)))
-                    .service(web::resource("/brewery").route(web::get().to_async(search_brewery))),
+                    .service(web::resource("/beer").route(web::get().to(search_beer)))
+                    .service(web::resource("/brewery").route(web::get().to(search_brewery))),
             )
     })
     .bind(&listen_addr)

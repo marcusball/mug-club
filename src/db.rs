@@ -7,6 +7,7 @@ use diesel::prelude::*;
 use diesel::r2d2;
 use diesel::sql_types::Text;
 use futures::future::Future;
+use futures::prelude::*;
 use regex::Regex;
 use textnonce::TextNonce;
 
@@ -24,18 +25,27 @@ pub type Connection = r2d2::PooledConnection<r2d2::ConnectionManager<PgConnectio
 sql_function!(fn lower(x: Text) -> Text);
 
 pub trait Query {
-    type Result: Send;
+    type Output: Send;
 
-    fn execute(&self, conn: Connection) -> Self::Result;
+    fn execute(&self, conn: Connection) -> Result<Self::Output>;
 }
 
 pub fn execute<T: Query + Send + 'static>(
     pool: &Pool,
     query: T,
-) -> impl Future<Item = T::Result, Error = Error> {
+) -> impl Future<Output = Result<T::Output>> {
+    use futures::channel::oneshot::Canceled as FutureCanceled;
+    use std::result::Result as StdResult;
     let pool = pool.clone();
 
-    web::block::<_, _, Error>(move || Ok(query.execute(pool.get()?))).from_err()
+    web::block::<_, _>(move || Ok(query.execute(pool.get()?))).map(
+        |res: StdResult<Result<Result<T::Output>>, FutureCanceled>| match res {
+            Ok(Ok(Ok(r))) => Ok(r),
+            Ok(Ok(Err(e))) => Err(Error::from(e)),
+            Ok(Err(e)) => Err(Error::from(e)),
+            Err(e) => Err(Error::from(e)),
+        },
+    )
 }
 
 #[derive(Serialize, Queryable)]
@@ -62,9 +72,9 @@ pub struct CreateDrink {
 }
 
 impl Query for CreateDrink {
-    type Result = Result<models::Drink>;
+    type Output = models::Drink;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use self::schema::drink::dsl::*;
 
         let new_drink = models::NewDrink {
@@ -91,9 +101,9 @@ pub struct GetDrinks {
 }
 
 impl Query for GetDrinks {
-    type Result = Result<Vec<ExpandedDrink>>;
+    type Output = Vec<ExpandedDrink>;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::beer;
         use super::schema::beer::dsl::*;
         use super::schema::brewery;
@@ -126,9 +136,9 @@ pub struct GetDrink {
 }
 
 impl Query for GetDrink {
-    type Result = Result<ExpandedDrink>;
+    type Output = ExpandedDrink;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::beer;
         use super::schema::beer::dsl::*;
         use super::schema::brewery;
@@ -161,9 +171,9 @@ pub struct DeleteDrink {
 }
 
 impl Query for DeleteDrink {
-    type Result = Result<usize>;
+    type Output = usize;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::drink::dsl::*;
 
         Ok(
@@ -181,9 +191,9 @@ pub struct GetBreweryByName {
 }
 
 impl Query for GetBreweryByName {
-    type Result = Result<Option<models::Brewery>>;
+    type Output = Option<models::Brewery>;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::brewery::dsl::*;
 
         Ok(brewery
@@ -202,9 +212,9 @@ pub struct GetBeerByName {
 }
 
 impl Query for GetBeerByName {
-    type Result = Result<Option<models::Beer>>;
+    type Output = Option<models::Beer>;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::beer::dsl::*;
 
         Ok(beer
@@ -226,9 +236,9 @@ pub struct CreateBrewery {
 }
 
 impl Query for CreateBrewery {
-    type Result = Result<models::Brewery>;
+    type Output = models::Brewery;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::brewery::dsl::*;
 
         let new_brewery = models::NewBrewery { name: &self.name };
@@ -248,9 +258,9 @@ pub struct CreateBeer {
 }
 
 impl Query for CreateBeer {
-    type Result = Result<models::Beer>;
+    type Output = models::Beer;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::beer::dsl::*;
 
         let new_beer = models::NewBeer {
@@ -273,9 +283,9 @@ pub struct LookupIdentiy {
 }
 
 impl Query for LookupIdentiy {
-    type Result = Result<models::Identity>;
+    type Output = models::Identity;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use self::schema::identity::dsl::*;
         use self::schema::person::dsl::*;
 
@@ -326,9 +336,9 @@ pub struct StartSession {
 }
 
 impl Query for StartSession {
-    type Result = Result<models::Session>;
+    type Output = models::Session;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use self::schema::login_session::dsl::*;
 
         // Create a unique identifier for this session
@@ -355,9 +365,9 @@ pub struct GetSession {
 }
 
 impl Query for GetSession {
-    type Result = Result<models::Session>;
+    type Output = models::Session;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use self::schema::login_session::dsl::*;
 
         Ok(login_session
@@ -384,9 +394,9 @@ impl GetLoggedInPerson {
 }
 
 impl Query for GetLoggedInPerson {
-    type Result = Result<models::Person>;
+    type Output = models::Person;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use self::schema::login_session::dsl::id as sid;
         use self::schema::login_session::dsl::login_session;
         use self::schema::person::dsl::*;
@@ -416,14 +426,14 @@ pub struct SearchBeerByName {
 }
 
 impl Query for SearchBeerByName {
-    type Result = Result<Vec<BeerSearchResult>>;
+    type Output = Vec<BeerSearchResult>;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::beer;
         use super::schema::beer::dsl::*;
         use super::schema::brewery;
         use diesel::dsl::sql;
-        use diesel::sql_types::{Float, Text};
+        use diesel::sql_types::Float;
 
         let tsquery = tsquery_string(&self.query);
 
@@ -463,9 +473,9 @@ pub struct SearchBreweryByName {
 }
 
 impl Query for SearchBreweryByName {
-    type Result = Result<Vec<BrewerySearchResult>>;
+    type Output = Vec<BrewerySearchResult>;
 
-    fn execute(&self, conn: Connection) -> Self::Result {
+    fn execute(&self, conn: Connection) -> Result<Self::Output> {
         use super::schema::brewery;
         use super::schema::brewery::dsl::*;
         use diesel::dsl::sql;

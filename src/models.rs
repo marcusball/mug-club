@@ -7,7 +7,9 @@ use actix_web::Error as ActixError;
 use actix_web::{FromRequest, HttpMessage, HttpRequest};
 use chrono::naive::NaiveDate;
 use chrono::{DateTime, Utc};
+use futures::future::Either;
 use futures::future::Future;
+use futures::prelude::*;
 
 #[derive(Serialize, Queryable)]
 
@@ -85,21 +87,10 @@ pub struct Person {
     pub updated_at: DateTime<Utc>,
 }
 
-pub struct FuturePerson(Box<dyn Future<Item = Person, Error = ActixError>>);
-
-impl futures::future::Future for FuturePerson {
-    type Item = Person;
-    type Error = ActixError;
-
-    fn poll(&mut self) -> futures::Poll<Self::Item, Self::Error> {
-        self.0.poll()
-    }
-}
-
 impl FromRequest for Person {
-    type Error = ActixError;
+    type Error = Error;
     type Config = ();
-    type Future = FuturePerson;
+    type Future = impl Future<Output = Result<Person>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut actix_web::dev::Payload) -> Self::Future {
         use crate::db::GetLoggedInPerson;
@@ -118,22 +109,12 @@ impl FromRequest for Person {
 
         let auth = match auth {
             Ok(auth) => auth,
-            Err(e) => return FuturePerson(Box::new(futures::future::err(e))),
+            Err(e) => return Either::Left(futures::future::ready(Err(Error::from(e)))),
         };
 
-        FuturePerson(Box::new(
-            crate::db::execute(&pool, GetLoggedInPerson::from_session(auth.to_string()))
-                .from_err()
-                .and_then(|r| match r {
-                    Ok(person) => futures::future::ok(person),
-                    Err(e) => futures::future::err(match e {
-                        // If it's a Diesel error, then it's most likely just a record not found.
-                        Error::DieselError(e) => awerror::ErrorUnauthorized(e),
-                        Error::PoolError(e) => awerror::ErrorServiceUnavailable(e),
-                        // If it's any other kind of error, treat it like an Internal Server Error.
-                        e => awerror::ErrorInternalServerError(e),
-                    }),
-                }),
+        Either::Right(crate::db::execute(
+            &pool,
+            GetLoggedInPerson::from_session(auth.to_string()),
         ))
     }
 }
