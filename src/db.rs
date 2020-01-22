@@ -34,16 +34,22 @@ pub fn execute<T: Query + Send + 'static>(
     pool: &Pool,
     query: T,
 ) -> impl Future<Output = Result<T::Output>> {
-    use futures::channel::oneshot::Canceled as FutureCanceled;
+    use actix_web::error::BlockingError;
+    use futures::channel::oneshot::Canceled;
     use std::result::Result as StdResult;
     let pool = pool.clone();
 
-    web::block::<_, _>(move || Ok(query.execute(pool.get()?))).map(
-        |res: StdResult<Result<Result<T::Output>>, FutureCanceled>| match res {
-            Ok(Ok(Ok(r))) => Ok(r),
-            Ok(Ok(Err(e))) => Err(Error::from(e)),
+    web::block::<_, _, Error>(move || {
+        Ok(query
+            .execute(pool.get().map_err(|e| Error::from(e))?)
+            .map_err(|e| Error::from(e)))
+    })
+    .map(
+        |res: StdResult<Result<T::Output>, BlockingError<Error>>| match res {
+            Ok(Ok(r)) => Ok(r),
             Ok(Err(e)) => Err(Error::from(e)),
-            Err(e) => Err(Error::from(e)),
+            Err(BlockingError::Error(e)) => Err(Error::from(e)),
+            Err(BlockingError::Canceled) => Err(Error::from(Canceled)),
         },
     )
 }

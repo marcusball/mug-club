@@ -46,6 +46,7 @@ use actix_cors::Cors;
 use actix_web::middleware::Logger;
 use actix_web::*;
 use actix_web::{App, HttpRequest, HttpServer, Responder};
+use actix_web::error::BlockingError;
 use authy::AuthyError;
 use chrono::naive::NaiveDate;
 use diesel::prelude::*;
@@ -53,6 +54,7 @@ use diesel::r2d2::ConnectionManager;
 use futures::future::Either;
 use futures::Future;
 use futures::prelude::*;
+use futures::channel::oneshot::Canceled;
 use regex::Regex;
 
 type ActixResult<T> = std::result::Result<T, actix_web::error::Error>;
@@ -72,6 +74,13 @@ async fn wakeup() -> impl Responder {
     struct TestResponse(String);
 
     HttpResponse::Ok().json(ApiResponse::success(TestResponse("👍".into())))
+}
+
+async fn p404() -> impl Responder {
+    #[derive(Serialize)]
+    #[serde(rename = "error")]
+    struct TestResponse(String);
+    HttpResponse::Ok().json(ApiResponse::error(TestResponse("404 Not Found".into())))
 }
 
 async fn get_drinks(
@@ -316,13 +325,13 @@ async fn begin_auth(form: web::Form<AuthForm>) -> ActixResult<HttpResponse> {
                 &form.phone_number,
                 Some(6),
                 None,
-            )
+            ).map_err(|e| Error::from(e))
         })
         .map(|f| {
             match f {
-                Ok(Ok(f)) => Ok(f),
-                Ok(Err(e)) => Err(Error::from(e)),
-                Err(e) => Err(Error::from(e)),
+                Ok(f) => Ok(f),
+                Err(BlockingError::Error(e)) => Err(Error::from(e)),
+                Err(BlockingError::Canceled) => Err(Error::from(Canceled)),
             }
         })
         .and_then(|(status, _start)| async move {
@@ -421,17 +430,20 @@ async fn complete_auth(
     let full_number_clone_1 = full_number.clone();
     let full_number_clone_2 = full_number.clone();
 
-    web::block(move || phone::check(
-        &client,
-        form.country_code,
-        &form.phone_number,
-        &verification_code,
-    ))
+    web::block(move || {
+        phone::check(
+            &client,
+            form.country_code,
+            &form.phone_number,
+            &verification_code,
+        )
+        .map_err(|e| Error::from(e))
+    })
     .map(|f| {
         match f {
-            Ok(Ok(f)) => Ok(f),
-            Ok(Err(e)) => Err(Error::from(e)),
-            Err(e) => Err(Error::from(e)),
+            Ok(f) => Ok(f),
+            Err(BlockingError::Error(e)) => Err(Error::from(e)),
+            Err(BlockingError::Canceled) => Err(Error::from(Canceled)),
         }
     })
     .and_then(|verify_status| async move {
@@ -650,7 +662,8 @@ async fn search_brewery(
         .await
 }
 
-fn main() {
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
     env_logger::init();
 
@@ -673,11 +686,12 @@ fn main() {
     let manager = ConnectionManager::<PgConnection>::new(database_url);
     let pool = Pool::new(manager).expect("Failed to create database connection pool!");
 
-    let sys = actix_rt::System::new("http-server");
+    info!("Listening on {}", listen_addr);
 
     HttpServer::new(move || {
         App::new()
             .data(pool.clone())
+            .app_data(pool.clone())
             .wrap(Logger::default())
             .wrap(Cors::default())
             .route("/", web::get().to(index))
@@ -703,11 +717,7 @@ fn main() {
                     .service(web::resource("/brewery").route(web::get().to(search_brewery))),
             )
     })
-    .bind(&listen_addr)
-    .unwrap()
-    .start();
-
-    info!("Listening on {}", listen_addr);
-
-    let _ = sys.run();
+    .bind(&listen_addr)?
+    .run()
+    .await
 }

@@ -5,6 +5,7 @@ use diesel::r2d2;
 use diesel::result::Error as DieselError;
 use futures::channel::oneshot::Canceled as FutureCanceled;
 use std::convert::From;
+use std::error::Error as StdError;
 
 pub type Result<T> = ::std::result::Result<T, Error>;
 
@@ -24,17 +25,6 @@ pub enum Error {
 }
 
 impl std::error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            Self::ActixError => "Internal Actix Error",
-            Self::AuthyError(e) => e.description(),
-            Self::SessionNotFound => "Session not found!",
-            Self::DieselError(e) => e.description(),
-            Self::PoolError(e) => e.description(),
-            Self::FutureCanceled(e) => e.description(),
-        }
-    }
-
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ActixError => None,
@@ -46,7 +36,23 @@ impl std::error::Error for Error {
         }
     }
 }
-impl ResponseError for Error {}
+impl ResponseError for Error {
+    fn error_response(&self) -> actix_web::web::HttpResponse {
+        actix_web::dev::HttpResponseBuilder::new(self.status_code())
+            .set_header(
+                actix_web::http::header::CONTENT_TYPE,
+                "text/html; charset=utf-8",
+            )
+            .body(format!(
+                "Error: {}\n\n{:?}",
+                self.to_string(),
+                self.source()
+            ))
+    }
+    fn status_code(&self) -> actix_web::http::StatusCode {
+        actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
 
 impl From<DieselError> for Error {
     fn from(e: DieselError) -> Error {
